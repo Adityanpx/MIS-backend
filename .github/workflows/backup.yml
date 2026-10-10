@@ -1,0 +1,36 @@
+name: Backup
+on:
+  schedule:
+    - cron: '0 20 * * *'   # 01:30 IST
+  workflow_dispatch: {}
+  workflow_call: {}         # release.yml runs it before migrating
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL 17 client (dumps 15–17 servers)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y postgresql-client-17
+      - name: Dump (schemas app + pgboss), encrypt
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL_PROD }}
+          BACKUP_ENC_KEY: ${{ secrets.BACKUP_ENC_KEY }}
+        run: |
+          set -euo pipefail
+          F="ommis-$(date -u +%Y%m%dT%H%MZ).dump"
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --format=custom --schema=app --schema=pgboss --file "$F"
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$F" -out "$F.enc" -pass env:BACKUP_ENC_KEY
+          rm -f "$F"
+          echo "FILE=$F.enc" >> "$GITHUB_ENV"
+      - name: Upload to R2 (bucket with a 30-day lifecycle rule)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp "$FILE" "s3://${{ secrets.R2_BACKUP_BUCKET }}/db/$FILE" \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"

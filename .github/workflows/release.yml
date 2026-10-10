@@ -1,0 +1,49 @@
+name: Release
+on:
+  push:
+    tags: ['v*.*.*']
+jobs:
+  backup:
+    uses: ./.github/workflows/backup.yml
+    secrets: inherit
+  release:
+    needs: backup
+    runs-on: ubuntu-latest
+    environment: production          # GitHub environment with required reviewers = manual approval
+    env:
+      NODE_ENV: staging              # scripts below use console/local drivers; production checks don't apply to them
+      APP_ENV: release
+      DB_SSL: require
+      DIRECT_URL: ${{ secrets.MIGRATION_DATABASE_URL_PROD }}
+      # needed only because src/config/env.ts validates everything when the seeder imports it:
+      DATABASE_URL: ${{ secrets.APP_DATABASE_URL_PROD }}
+      ADMIN_DATABASE_URL: ${{ secrets.ADMIN_DATABASE_URL_PROD }}
+      PUBLIC_API_URL: ${{ secrets.API_URL_PROD }}
+      PUBLIC_WEB_URL: https://app.example.com
+      PUBLIC_ADMIN_URL: https://admin.example.com
+      JWT_CLIENT_SECRET: release-placeholder-secret-not-used-0000000000
+      JWT_ADMIN_SECRET: release-placeholder-secret-not-used-1111111111
+      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY_PROD }}
+      EMAIL_FROM: OMMIS <no-reply@example.com>
+      CRON_SECRET: release-placeholder-cron-secret-000000000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Migrate production (forward-only)
+        run: npm run db:migrate
+      - name: Seed new defaults (idempotent, never overwrites)
+        run: npm run db:seed
+      - name: RLS guard
+        run: npm run check-rls
+      - name: Deploy on Render
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_PROD }}"
+      - name: Smoke test (/ready up to 10 minutes)
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS "${{ secrets.API_URL_PROD }}/ready" | grep -q '"status":"ready"'; then echo "ready"; exit 0; fi
+            sleep 30
+          done
+          echo "API not ready after deploy"; exit 1

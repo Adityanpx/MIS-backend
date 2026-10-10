@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.storage/
+.env
+.env.*
+!.env.example
+!.env.test.example
+*.log
+CLAUDE.md

@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: ommis-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free                 # move to Starter (≥ 1 GB RAM recommended for PDFs) before the first paying client (TRD §17)
+    region: singapore          # closest Render region to Supabase/R2 in Mumbai
+    healthCheckPath: /health
+    autoDeploy: false          # production deploys come from release.yml (deploy hook)
+    envVars:
+      - { key: NODE_ENV, value: production }
+      - { key: APP_ENV, value: production }
+      - { key: PORT, value: "4000" }
+      - { key: LOG_LEVEL, value: info }
+      - { key: JOBS_MODE, value: boss }
+      - { key: PDF_ENABLED, value: "true" }
+      - { key: PDF_MAX_PER_BROWSER, value: "50" }
+      - { key: STORAGE_DRIVER, value: r2 }
+      - { key: EMAIL_DRIVER, value: resend }
+      - { key: RAZORPAY_DRIVER, value: live }
+      - { key: DB_SSL, value: require }
+      - { key: DB_POOL_APP_MAX, value: "8" }
+      - { key: DB_POOL_ADMIN_MAX, value: "6" }
+      - { key: COOKIE_SECURE, value: "true" }
+      - { key: COOKIE_SAMESITE, value: lax }        # "none" only while the frontends are on *.vercel.app
+      - { key: ACCESS_TOKEN_TTL_SEC, value: "900" }
+      - { key: SIGNED_URL_TTL_SEC, value: "900" }
+      # secrets: set in the Render dashboard (never in git)
+      - { key: PUBLIC_API_URL, sync: false }
+      - { key: PUBLIC_WEB_URL, sync: false }
+      - { key: PUBLIC_ADMIN_URL, sync: false }
+      - { key: CORS_ORIGINS, sync: false }
+      - { key: COOKIE_DOMAIN, sync: false }
+      - { key: DATABASE_URL, sync: false }
+      - { key: ADMIN_DATABASE_URL, sync: false }
+      - { key: DB_SSL_CA, sync: false }
+      - { key: JWT_CLIENT_SECRET, sync: false }
+      - { key: JWT_ADMIN_SECRET, sync: false }
+      - { key: ENCRYPTION_KEY, sync: false }
+      - { key: ADMIN_IP_ALLOWLIST, sync: false }
+      - { key: R2_ACCOUNT_ID, sync: false }
+      - { key: R2_ACCESS_KEY_ID, sync: false }
+      - { key: R2_SECRET_ACCESS_KEY, sync: false }
+      - { key: R2_BUCKET, sync: false }
+      - { key: RESEND_API_KEY, sync: false }
+      - { key: EMAIL_FROM, sync: false }
+      - { key: EMAIL_REPLY_TO, sync: false }
+      - { key: CRON_SECRET, sync: false }
+      - { key: SENTRY_DSN, sync: false }
+      - { key: RAZORPAY_WEBHOOK_SECRET, sync: false }   # optional fallback; normally set in Super Admin → Settings

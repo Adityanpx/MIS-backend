@@ -1,0 +1,42 @@
+name: Cron
+on:
+  schedule:
+    - cron: '0 19 * * *'     # 00:30 IST invoices.generate
+    - cron: '30 19 * * *'    # 01:00 IST lifecycle.evaluate
+    - cron: '30 20 * * *'    # 02:00 IST razorpay.reconcile (also refreshes expired payment links)
+    - cron: '30 22 * * *'    # 04:00 IST usage.snapshot
+    - cron: '30 23 * * *'    # 05:00 IST deletion.queue
+    - cron: '30 3 * * *'     # 09:00 IST reminders.billing
+    - cron: '45 3 * * *'     # 09:15 IST reminders.expiry
+    - cron: '30 6 * * *'     # 12:00 IST logsheet.missing
+    - cron: '*/30 * * * *'   # every 30 min email.retry (also wakes the free Render instance)
+  workflow_dispatch:
+    inputs:
+      job:
+        description: job name (e.g. invoices.generate)
+        required: true
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide job
+        id: pick
+        run: |
+          if [ -n "${{ github.event.inputs.job }}" ]; then JOB="${{ github.event.inputs.job }}"; else
+          case "${{ github.event.schedule }}" in
+            "0 19 * * *") JOB=invoices.generate;;
+            "30 19 * * *") JOB=lifecycle.evaluate;;
+            "30 20 * * *") JOB=razorpay.reconcile;;
+            "30 22 * * *") JOB=usage.snapshot;;
+            "30 23 * * *") JOB=deletion.queue;;
+            "30 3 * * *") JOB=reminders.billing;;
+            "45 3 * * *") JOB=reminders.expiry;;
+            "30 6 * * *") JOB=logsheet.missing;;
+            *) JOB=email.retry;;
+          esac; fi
+          echo "job=$JOB" >> "$GITHUB_OUTPUT"
+      - name: Call API
+        run: |
+          curl -fsS -X POST -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            --retry 5 --retry-delay 20 --retry-all-errors --max-time 90 \
+            "${{ secrets.API_BASE_URL }}/internal/cron/${{ steps.pick.outputs.job }}"
