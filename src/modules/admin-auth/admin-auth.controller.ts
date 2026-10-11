@@ -22,7 +22,8 @@ function cookie(req: Request): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 const sendMfa = (res: Response, r: svc.AdminLoginResult) =>
-  ok(res, { mfaRequired: true, mfaPurpose: r.purpose, mfaToken: r.mfaToken });
+  // devCode: TEMP TESTING (remove before go-live) — see AdminLoginResult.
+  ok(res, { mfaRequired: true, mfaPurpose: r.purpose, mfaToken: r.mfaToken, ...(r.devCode ? { devCode: r.devCode } : {}) });
 
 export async function login(req: Request, res: Response) {
   const b = parseBody(req, loginBody);

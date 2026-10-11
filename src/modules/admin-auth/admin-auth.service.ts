@@ -1,4 +1,5 @@
 import { LOCKOUT_ATTEMPTS, LOCKOUT_MINUTES, REFRESH_REUSE_GRACE_MS } from '../../config/constants';
+import { isProd } from '../../config/env';
 import { exec, maybeOne, one, setClause } from '../../db/sql';
 import { withAdmin, withSystem } from '../../db/tenant';
 import { decrypt, encrypt, sha256 } from '../../lib/crypto';
@@ -6,7 +7,7 @@ import { badRequest, conflict, lockedState, unauthorized, unprocessable } from '
 import { signAdminMfa, verifyAdminMfa } from '../../lib/jwt';
 import { assertPasswordPolicy, hashPassword, verifyPassword } from '../../lib/password';
 import type { RequestMeta } from '../../lib/request-meta';
-import { generateTotpSecret, totpUri, verifyTotp } from '../../lib/totp';
+import { generateTotp, generateTotpSecret, totpUri, verifyTotp } from '../../lib/totp';
 import { invalidateAdminAuthCache } from '../../middleware/auth-admin';
 import { adminActor, diff, writeAudit } from '../audit/audit.service';
 import { queueEmail, renderEmail, sendInBackground } from '../notifications/email.service';
@@ -14,7 +15,13 @@ import { platformName } from '../platform/settings.service';
 import { createAdminToken, queueAdminResetEmail } from './admin-tokens';
 import { issueAdminSession, loadAdminProfile, type AdminProfile, type AdminSession } from './admin-session';
 
-export type AdminLoginResult = { kind: 'mfa'; purpose: 'verify' | 'enrol'; mfaToken: string };
+export type AdminLoginResult = {
+  kind: 'mfa';
+  purpose: 'verify' | 'enrol';
+  mfaToken: string;
+  /** TEMP TESTING (remove before go-live): current TOTP code, non-production builds only. */
+  devCode?: string;
+};
 
 interface AdminRow {
   id: string; name: string; email: string; password_hash: string | null; status: string;
@@ -65,10 +72,13 @@ async function loadMfaAdmin(token: string, purpose: 'verify' | 'enrol'): Promise
   return a;
 }
 
-const mfaFor = (a: { id: string; totp_enabled: boolean }): AdminLoginResult =>
-  a.totp_enabled
-    ? { kind: 'mfa', purpose: 'verify', mfaToken: signAdminMfa({ sub: a.id, purpose: 'verify' }) }
-    : { kind: 'mfa', purpose: 'enrol', mfaToken: signAdminMfa({ sub: a.id, purpose: 'enrol' }) };
+const mfaFor = (a: { id: string; totp_enabled: boolean; totp_secret_enc: string | null }): AdminLoginResult => {
+  if (!a.totp_enabled) return { kind: 'mfa', purpose: 'enrol', mfaToken: signAdminMfa({ sub: a.id, purpose: 'enrol' }) };
+  const r: AdminLoginResult = { kind: 'mfa', purpose: 'verify', mfaToken: signAdminMfa({ sub: a.id, purpose: 'verify' }) };
+  // TEMP TESTING (remove before go-live): show the current code so QA can sign in without a real authenticator app.
+  if (!isProd && a.totp_secret_enc) r.devCode = generateTotp(decrypt(a.totp_secret_enc));
+  return r;
+};
 
 async function startSession(adminId: string, meta: RequestMeta, method: string): Promise<AdminSession> {
   return withAdmin({ adminId }, async (tx) => {
@@ -269,10 +279,10 @@ export async function adminAcceptInvite(rawToken: string, password: string, meta
   const adminId = await consumeAdminToken(rawToken, 'invite');
   if (!adminId) throw invalidLink();
   const a = await withAdmin({ adminId }, async (tx) => {
-    const row = await maybeOne<{ id: string; totp_enabled: boolean }>(
+    const row = await maybeOne<{ id: string; totp_enabled: boolean; totp_secret_enc: string | null }>(
       tx,
       `UPDATE app.super_admins SET password_hash = $2, status = 'active' WHERE id = $1 AND status = 'invited'
-        RETURNING id, totp_enabled`,
+        RETURNING id, totp_enabled, totp_secret_enc`,
       [adminId, hash],
     );
     if (row) {
