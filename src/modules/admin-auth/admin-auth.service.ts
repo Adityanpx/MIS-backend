@@ -122,14 +122,15 @@ export async function adminVerifyMfa(mfaToken: string, code: string, meta: Reque
   return startSession(a.id, meta, 'password+totp');
 }
 
-export async function adminEnrolStart(mfaToken: string): Promise<{ secret: string; otpauthUrl: string }> {
+export async function adminEnrolStart(mfaToken: string): Promise<{ secret: string; otpauthUrl: string; devCode?: string }> {
   const a = await loadMfaAdmin(mfaToken, 'enrol');
   if (a.totp_enabled) throw conflict('TWO_FACTOR_ALREADY_ENABLED', 'Two-factor authentication is already enabled.');
   const secret = generateTotpSecret();
   await withAdmin({ adminId: a.id }, (tx) =>
     exec(tx, 'UPDATE app.super_admins SET totp_secret_enc = $2 WHERE id = $1', [a.id, encrypt(secret)]),
   );
-  return { secret, otpauthUrl: totpUri(a.email, secret, `${await platformName()} Admin`) };
+  // TEMP TESTING (remove before go-live): show the current code on the enrolment screen (non-production only).
+  return { secret, otpauthUrl: totpUri(a.email, secret, `${await platformName()} Admin`), ...(!isProd ? { devCode: generateTotp(secret) } : {}) };
 }
 
 export async function adminEnrolConfirm(mfaToken: string, code: string, meta: RequestMeta): Promise<AdminSession> {
