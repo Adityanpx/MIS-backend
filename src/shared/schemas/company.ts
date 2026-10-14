@@ -17,15 +17,26 @@ export const userInviteBody = z
     mobile: mobile.optional(),
     designation: z.string().trim().max(100).optional(),
     isClientAdmin: z.boolean().default(false),
+    isManagement: z.boolean().default(false),
     plantRoles: z.array(plantRole).max(200).default([]),
   })
-  .strict();
+  .strict()
+  .refine((b) => !(b.isClientAdmin && b.isManagement), {
+    message: 'A user is either Client Admin or Management, not both.', path: ['isManagement'],
+  })
+  .refine((b) => !b.isManagement || b.plantRoles.length === 0, {
+    message: 'Management users do not take per-plant roles.', path: ['plantRoles'],
+  });
 export const userPatchBody = z
   .object({
     name: personName.optional(),
     mobile: mobile.nullable().optional(),
     designation: z.string().trim().max(100).nullable().optional(),
     isClientAdmin: z.boolean().optional(),
+    isManagement: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => !(b.isClientAdmin && b.isManagement), {
+    message: 'A user is either Client Admin or Management, not both.', path: ['isManagement'],
+  });
 export const plantRolesPutBody = z.object({ roles: z.array(plantRole).max(200) }).strict();

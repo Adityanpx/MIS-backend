@@ -12,6 +12,7 @@ export const submitBody = z.object({
   values: z.array(valueItem).max(500).optional(),
   version: z.coerce.number().int().min(0),
   remarks: z.string().trim().max(1000).optional(),
+  breakdownReviewed: z.boolean().optional(), // required by block 8 when maintenance is enabled
 }).strict();
 export const correctBody = z.object({ values: z.array(valueItem).min(1).max(500), version: z.coerce.number().int().min(1), reason }).strict();
 export const correctionRequestBody = z.object({ values: z.array(valueItem).min(1).max(500), reason }).strict();

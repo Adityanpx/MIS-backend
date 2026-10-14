@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { AGGREGATIONS, DIRECTIONS, EVENT_RULES, INPUT_MODES, PARAM_GROUPS, STD_TYPES } from '../enums';
+import {
+  AGGREGATIONS, DIRECTIONS, EVENT_RULES, INPUT_MODES, MONITORING_TABS, PARAM_GROUPS,
+  RESULT_DISPLAY_OVERRIDES, RESULT_MODES, STANDARD_KINDS, STANDARDS_SHOWN, STD_TYPES,
+} from '../enums';
 import { isoDate, moneyString, reason } from './common';
 
 const num = z.coerce.number().finite();
@@ -24,6 +27,21 @@ export const generalPatchBody = z.object({
   editorBackfillDays: z.coerce.number().int().min(0).max(365).optional(),
   avgDivisor: z.enum(['calendar_days', 'data_days']).optional(),
   pdfPrefixMis: text(60).optional(),
+  // v1.1 (SET-09..12)
+  primaryStandard: z.enum(STANDARD_KINDS).optional(),
+  standardsShown: z.enum(STANDARDS_SHOWN).optional(),
+  resultsDisplay: z.enum(RESULT_MODES).optional(),
+  tabLabels: z.record(z.enum(MONITORING_TABS), z.string().trim().max(80)).optional(),
+  maintenanceSettings: z.object({
+    enabled: z.boolean().optional(),
+    reviewTickRequired: z.boolean().optional(),
+    longOpenAlertDays: z.coerce.number().int().min(1).max(60).optional(),
+    criticalLongOpenDays: z.coerce.number().int().min(1).max(60).optional(),
+    repeatThreshold: z.coerce.number().int().min(2).max(20).optional(),
+    repeatWindowDays: z.coerce.number().int().min(7).max(365).optional(),
+    criticalAlertEnabled: z.boolean().optional(),
+  }).strict().optional(),
+  v1_1Enabled: z.boolean().optional(),
 }).strict();
 
 const parameterFields = {
@@ -45,6 +63,8 @@ const parameterFields = {
   logsheetOrder: z.coerce.number().int().min(0).max(1000).optional(),
   misSection: z.enum(['key', 'chemicals', 'lab_inlet', 'lab_outlet']).nullable().optional(),
   misOrder: z.coerce.number().int().min(0).max(1000).optional(),
+  monitoringTab: z.enum(MONITORING_TABS).optional(),
+  resultDisplay: z.enum(RESULT_DISPLAY_OVERRIDES).nullable().optional(),
   dashboardCard: z.boolean().default(false),
   dashboardOrder: z.coerce.number().int().min(0).max(1000).optional(),
   chartType: z.enum(['bar', 'line', 'cone', 'none']).default('none'),
@@ -60,10 +80,12 @@ export const parameterCreateBody = z.object({
 export const parameterPatchBody = z.object(parameterFields).partial().strict();
 
 export const standardCreateBody = z.object({
+  kind: z.enum(STANDARD_KINDS).default('actual'),
   std: num.nullable().optional(),
   monthly: num.nullable().optional(),
   min: num.nullable().optional(),
   max: num.nullable().optional(),
+  inheritFromKind: z.enum(STANDARD_KINDS).nullable().optional(),
   ...effective,
 }).strict();
 export const constantCreateBody = z.object({
@@ -92,9 +114,11 @@ export const requirementBody = z.object({ qty: z.coerce.number().int().min(0), .
 export const contractYearPatchBody = z.object({ fixedFee: moneyString }).strict();
 export const componentCreateBody = z.object({
   name: text(100), parameterCode: code, rate: num.min(0), stdQtyPerDay: num.min(0).default(0),
+  actualStdQtyPerDay: num.min(0).nullable().optional(), // v1.1: NULL = same as stdQtyPerDay (Bidding)
 }).strict();
 export const componentPatchBody = z.object({
   name: text(100).optional(), rate: num.min(0).optional(), stdQtyPerDay: num.min(0).optional(),
+  actualStdQtyPerDay: num.min(0).nullable().optional(),
 }).strict();
 export const applyEscalationBody = z.object({
   fromYearNo: z.coerce.number().int().min(2).max(15), pct: num.min(-50).max(100),

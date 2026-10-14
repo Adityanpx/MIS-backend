@@ -63,6 +63,7 @@ export const planCreateBody = z
     escalationPct: pct(25).default(0),
     upfrontDiscountPct: pct(50).default(0),
     maxUsersPerPlant: z.coerce.number().int().min(1).max(1000).default(10),
+    maxManagementUsers: z.coerce.number().int().min(0).max(100).default(5),
     storageGb: z.coerce.number().int().min(1).max(1000).default(5),
     features: z.record(z.boolean()).default({}),
   })
