@@ -1,18 +1,30 @@
 import { Router, type Request } from 'express';
+import { z } from 'zod';
 import { maybeOne, one } from '../../db/sql';
 import { withTenant } from '../../db/tenant';
 import { clientCtx, tenantTx } from '../../lib/context';
 import { forbidden, notFound } from '../../lib/errors';
 import { asyncHandler, noContent, ok } from '../../lib/http';
-import { parseBody } from '../../lib/validate';
+import { parseBody, parseQuery } from '../../lib/validate';
 import { accountState } from '../../middleware/account-state';
 import { plantAccess } from '../../middleware/plant-access';
+import { STANDARD_KINDS } from '../../shared/enums';
+import { isoDate } from '../../shared/schemas/common';
 import { DEFAULT_DASHBOARD_WIDGETS, dashboardLayoutBody, type DashboardLayout } from '../../shared/schemas/dashboard';
 import { overview } from './overview.service';
+import { portfolio, portfolioDefaultDate } from './portfolio.service';
 
 /** Mounted at /api/v1/overview (after authClient + requireTermsAccepted). */
 export const overviewRouter = Router();
 overviewRouter.get('/', asyncHandler(async (req, res) => ok(res, await overview(clientCtx(req)))));
+
+/** Mounted at /api/v1/company/portfolio (v1.1, MGT-11): Client Admin or Management, read-only. */
+export const portfolioRouter = Router();
+const portfolioQuery = z.object({ date: isoDate.optional(), standard: z.enum([...STANDARD_KINDS, 'primary']).default('primary') }).strict();
+portfolioRouter.get('/', asyncHandler(async (req, res) => {
+  const q = parseQuery(req, portfolioQuery);
+  ok(res, await portfolio(clientCtx(req), q.date ?? portfolioDefaultDate(), q.standard));
+}));
 
 /**
  * Mounted at /api/v1/plants/:plantId/dashboard/layout — the signed-in user's own widget layout for this plant.
