@@ -39,6 +39,7 @@ export const EXEMPT: Record<string, string> = {
   'GET /company': 'own tenant (leak check below)', 'PATCH /company': 'own tenant', 'POST /company/logo': 'own tenant',
   'GET /company/users': 'list (leak check below)', 'GET /company/audit': 'list (leak check below)',
   'GET /plants': 'list (leak check below)',
+  'GET /company/portfolio': 'own tenant only (built from listPlants, same as /plants)',
 };
 
 export interface Victim2 extends Victim { paramId: string; stockItemId: string; bgId: string; notificationId: string; exportId: string; pdfId: string; importId: string; correctionId: string }
