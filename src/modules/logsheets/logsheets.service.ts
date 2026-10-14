@@ -96,7 +96,7 @@ export async function form(ctx: ClientCtx, plant: PlantCtx, date: string) {
     const blocks = [...new Set(params.map((p) => p.block))].sort((a, x) => a - x).map((block) => ({
       block, title: BLOCKS[block] ?? `Block ${block}`,
       fields: params.filter((p) => p.block === block).sort((a, x) => a.order - x.order).map((p) => {
-        const st = standardAt(p, date);
+        const st = standardAt(p, date, s.primaryStandard);
         const safety = s.safety.find((i) => i.id === p.safetyItemId);
         return {
           parameterId: p.id, code: p.code, name: p.name, unit: p.unit, inputMode: p.inputMode, formula: p.formula,
@@ -119,6 +119,14 @@ export async function form(ctx: ClientCtx, plant: PlantCtx, date: string) {
       } : null,
       blocks,
       values: Object.fromEntries(values.map((v) => [v.parameter_id, v.value_num !== null ? Number(v.value_num) : v.value_text])),
+      // v1.1 (block 8, §12.3): the open breakdowns the editor must acknowledge before submitting.
+      maintenance: s.maintenance.enabled ? {
+        reviewTickRequired: s.maintenance.reviewTickRequired,
+        openBreakdowns: s.maintenance.breakdowns
+          .filter((bd) => bd.status !== 'cancelled' && bd.startedAt.slice(0, 10) <= date && (!bd.restoredAt || bd.restoredAt.slice(0, 10) > date))
+          .map((bd) => ({ id: bd.id, equipmentCode: bd.equipmentCode, equipmentName: bd.equipmentName, criticality: bd.criticality,
+            startedAt: bd.startedAt, status: bd.status, expectedRestoreOn: bd.expectedRestoreOn })),
+      } : null,
       context: { // lets the frontend compute live previews with src/shared/formula.ts (LOG-04)
         previousClosing: Object.fromEntries(s.stock.map((i) => [i.code, date === addDays(i.openingDate, 1) ? i.opening : prev?.stock[i.code] ?? null])),
         stockItems: s.stock.map((i) => ({ code: i.code, name: i.name, consumedCode: i.consumedCode, receivedCode: i.receivedCode, minLevel: i.minLevel })),
@@ -206,7 +214,7 @@ export async function saveDraft(ctx: ClientCtx, plant: PlantCtx, date: string, b
 }
 
 export async function submit(ctx: ClientCtx, plant: PlantCtx, date: string,
-  body: { values?: ValueIn[]; version: number; remarks?: string }, meta: RequestMeta) {
+  body: { values?: ValueIn[]; version: number; remarks?: string; breakdownReviewed?: boolean }, meta: RequestMeta) {
   const b = await getBundle(ctx.tenantId, plant.id);
   const outbox: Array<string | null> = [];
   const result = await withTenant(tenantTx(ctx), async (tx) => {
@@ -216,6 +224,10 @@ export async function submit(ctx: ClientCtx, plant: PlantCtx, date: string,
     if (sheet && sheet.status !== 'draft') throw conflict('LOGSHEET_ALREADY_SUBMITTED', 'This logsheet is already submitted.');
     if ((sheet?.version ?? 0) !== body.version) throw conflict('STALE_VERSION', 'Someone else saved this logsheet. Reload it.');
     if (lockedByOther(sheet, ctx.userId)) throw conflict('LOGSHEET_LOCKED', `Being edited by ${sheet?.locked_name}.`);
+    // v1.1 (block 8): with maintenance on, the editor must tick that they reviewed the breakdown status before submitting.
+    if (b.settings.maintenance.enabled && b.settings.maintenance.reviewTickRequired && !body.breakdownReviewed) {
+      throw unprocessable('BREAKDOWN_REVIEW_REQUIRED', 'Please review the machinery breakdown status before submitting.');
+    }
     const params = typedParams(b.settings, date);
     const values = sheet ? await currentValues(tx, ctx, sheet.id) : new Map();
     for (const [k, v] of toValues(b.settings.params, body.values ?? [])) values.set(k, v);
@@ -231,7 +243,7 @@ export async function submit(ctx: ClientCtx, plant: PlantCtx, date: string,
     const versions = await bumpVersions(tx, ctx.tenantId, plant.id, 'data');
     await markPdfsStale(tx, ctx.tenantId, plant.id, addDays(date, 1), 'data_changed'); // a late entry changes later balances
     await writeAudit(tx, clientActor(ctx), { action: 'logsheet.submit', entity: 'logsheet', entityId: row.id,
-      after: { date, version: row.version, warnings: warnings.length } }, meta);
+      after: { date, version: row.version, warnings: warnings.length, breakdownReviewed: body.breakdownReviewed ?? null } }, meta);
     // N-O02 / N-O03 / N-O09 (in-app)
     const outletBad = warnings.filter((w) => b.settings.params.find((p) => p.code === w.code)?.group === 'lab_outlet');
     const stockBad = warnings.filter((w) => w.message.includes('closing balance'));

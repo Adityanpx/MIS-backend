@@ -10,6 +10,7 @@ import { importsRouter } from '../imports/imports.routes';
 import { plantExportsRouter } from '../exports/exports.routes';
 import { viewsRouter } from '../reports/views.routes';
 import { layoutRouter } from '../insights/insights.routes';
+import { maintenanceRouter } from '../maintenance/maintenance.routes';
 import * as svc from './plants.service';
 
 export const plantsRouter = Router();
@@ -24,4 +25,5 @@ plantsRouter.use('/:plantId/pdfs', pdfRouter);
 plantsRouter.use('/:plantId/imports', importsRouter);
 plantsRouter.use('/:plantId/exports', plantExportsRouter);
 plantsRouter.use('/:plantId/dashboard/layout', layoutRouter);
+plantsRouter.use('/:plantId', maintenanceRouter); // /equipment, /breakdowns/* (v1.1)
 plantsRouter.use('/:plantId', viewsRouter); // /mis, /dashboard, /reports/*
