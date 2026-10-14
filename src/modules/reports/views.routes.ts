@@ -89,3 +89,16 @@ viewsRouter.get('/reports/submissions', ...gate, asyncHandler(async (req, res) =
   const q = parseQuery(req, rangeQ);
   await send(res, req, await rpt.submissions(clientCtx(req), plant, q.from ?? plant.misStart, q.to ?? todayIST()));
 }));
+// v1.1 (RPT-13..15)
+viewsRouter.get('/reports/breakdowns', ...gate, asyncHandler(async (req, res) => {
+  const q = parseQuery(req, rangeQ);
+  await send(res, req, rpt.breakdownRegister(await getBundle(clientCtx(req).tenantId, P(req).id), q.from, q.to));
+}));
+viewsRouter.get('/reports/equipment-history', ...gate, asyncHandler(async (req, res) => {
+  const q = parseQuery(req, rangeQ.extend({ equipment: z.string().trim().min(1).max(40) }));
+  await send(res, req, rpt.equipmentHistory(await getBundle(clientCtx(req).tenantId, P(req).id), q.equipment, q.from, q.to));
+}));
+viewsRouter.get('/reports/downtime-summary', ...gate, asyncHandler(async (req, res) => {
+  const q = parseQuery(req, rangeQ);
+  await send(res, req, rpt.downtimeSummary(await getBundle(clientCtx(req).tenantId, P(req).id), q.from, q.to));
+}));

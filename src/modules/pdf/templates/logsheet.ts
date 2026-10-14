@@ -14,10 +14,10 @@ export function logsheetHtml(b: Bundle, d: string, meta: { version: number; plat
   const blocks = [...new Set(s.params.map((p) => p.block))].sort((a, x) => a - x).map((block) => {
     const rows = s.params.filter((p) => p.block === block && (!p.activeTo || p.activeTo >= d)).sort((a, x) => a.order - x.order).map((p) => {
       const v = p.aggregation === 'text' ? (rec?.values[p.code] as string | null) ?? '' : dayValue(b.data, b.derived, p.code, d);
-      const st = standardAt(p, d);
+      const st = standardAt(p, d, s.primaryStandard);
       const safety = s.safety.find((i) => i.id === p.safetyItemId);
       const std = safety ? valueAt(safety.required, d) : st?.std ?? (st?.max != null ? `≤ ${st.max}` : null);
-      const warn = typeof v === 'number' && eventOn(s, p, d, v);
+      const warn = typeof v === 'number' && eventOn(s, p, d, v, s.primaryStandard);
       return `<tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td class="num">${typeof std === 'number' ? n(std, 2) : esc(std ?? '–')}</td>
         <td class="num ${warn ? 'bad' : ''}">${typeof v === 'number' ? n(v, p.decimals) : esc(v)}</td></tr>`;
     }).join('');

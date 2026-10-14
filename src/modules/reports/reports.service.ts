@@ -8,6 +8,7 @@ import { dayValue } from '../engine/core/derive';
 import { eachDay } from '../engine/core/periods';
 import { dailyStd, eventOn } from '../engine/core/stats';
 import type { Bundle } from '../engine/core/mis';
+import { computeMetrics, downtimeHoursInPeriod, openAsOf } from '../engine/core/maintenance';
 import type { ParamDef } from '../engine/core/types';
 import { NUM0, NUM2, type ReportTable } from './table';
 
@@ -118,9 +119,9 @@ export function trend(b: Bundle, code: string, from?: string, to?: string): Repo
   const r = range(b, from, to);
   const rows = [...eachDay(r)].map((d) => {
     const v = dayValue(b.data, b.derived, p.code, d);
-    const st = standardAt(p, d);
-    return { date: d, value: v, std: dailyStd(b.settings, p, d), min: st?.min ?? null, max: st?.max ?? null,
-      event: v !== null && eventOn(b.settings, p, d, v) ? 'YES' : '' };
+    const st = standardAt(p, d, b.settings.primaryStandard);
+    return { date: d, value: v, std: dailyStd(b.settings, p, d, b.settings.primaryStandard), min: st?.min ?? null, max: st?.max ?? null,
+      event: v !== null && eventOn(b.settings, p, d, v, b.settings.primaryStandard) ? 'YES' : '' };
   });
   return { title: `Trend: ${p.name}`, subtitle: `${r.from} to ${r.to}`,
     columns: [{ key: 'date', header: 'Date' }, { key: 'value', header: `${p.name} (${p.unit})`, numFmt: NUM2 },
@@ -185,8 +186,8 @@ export function labCompliance(b: Bundle, from?: string, to?: string, side: 'outl
   for (const d of eachDay(r)) {
     for (const p of ps) {
       const v = b.data.days.has(d) ? dayValue(b.data, b.derived, p.code, d) : null;
-      if (v === null || !eventOn(b.settings, p, d, v)) continue;
-      const st = standardAt(p, d);
+      if (v === null || !eventOn(b.settings, p, d, v, b.settings.primaryStandard)) continue;
+      const st = standardAt(p, d, b.settings.primaryStandard);
       rows.push({ date: d, parameter: p.name, value: v, limit: `${st?.min ?? ''}${st?.min != null && st?.max != null ? ' – ' : ''}${st?.max != null ? `≤ ${st.max}` : ''}`,
         remarks: (b.data.days.get(d)?.values.REMARKS as string | null) ?? '' });
       summary[p.name] = (summary[p.name] ?? 0) + 1;
@@ -218,4 +219,65 @@ export async function submissions(ctx: ClientCtx, plant: PlantCtx, from: string,
     columns: [{ key: 'date', header: 'Date' }, { key: 'status', header: 'Status' }, { key: 'submittedBy', header: 'Submitted by' },
       { key: 'submittedAt', header: 'Submitted at', width: 24 }, { key: 'source', header: 'Source' }],
     rows: out, meta: { missing: out.filter((r) => r.status === 'missing').length } };
+}
+
+/** v1.1 RPT-13: every breakdown that started in the range, newest first. */
+export function breakdownRegister(b: Bundle, from?: string, to?: string): ReportTable {
+  const r = range(b, from, to);
+  const bds = b.settings.maintenance.breakdowns
+    .filter((bd) => bd.startedAt.slice(0, 10) >= r.from && bd.startedAt.slice(0, 10) <= r.to)
+    .sort((x, y) => (x.startedAt < y.startedAt ? 1 : -1));
+  const rows = bds.map((bd) => ({
+    equipment: bd.equipmentName, criticality: bd.criticality, startedAt: bd.startedAt.slice(0, 16).replace('T', ' '),
+    restoredAt: bd.restoredAt ? bd.restoredAt.slice(0, 16).replace('T', ' ') : '',
+    downtimeHrs: bd.restoredAt ? Math.round(((new Date(bd.restoredAt).getTime() - new Date(bd.startedAt).getTime()) / 3_600_000) * 100) / 100 : null,
+    status: bd.status, impact: bd.impact, fault: bd.fault,
+  }));
+  return { title: 'Breakdown register', subtitle: `${r.from} to ${r.to}`,
+    columns: [{ key: 'equipment', header: 'Equipment', width: 24 }, { key: 'criticality', header: 'Criticality' },
+      { key: 'startedAt', header: 'Started', width: 20 }, { key: 'restoredAt', header: 'Restored', width: 20 },
+      { key: 'downtimeHrs', header: 'Downtime (hrs)', numFmt: NUM2 }, { key: 'status', header: 'Status' },
+      { key: 'impact', header: 'Impact' }, { key: 'fault', header: 'Fault', width: 40 }],
+    rows, meta: { total: rows.length, open: bds.filter((bd) => openAsOf(bd, r.to)).length } };
+}
+
+/** v1.1 RPT-14: one equipment's breakdown history + its downtime/availability over the range. */
+export function equipmentHistory(b: Bundle, equipmentCode: string, from?: string, to?: string): ReportTable {
+  const e = b.settings.maintenance.equipment.find((x) => x.code === equipmentCode);
+  if (!e) throw notFound('Equipment');
+  const r = range(b, from, to);
+  const bds = b.settings.maintenance.breakdowns.filter((bd) => bd.equipmentId === e.id);
+  const inRange = bds.filter((bd) => bd.startedAt.slice(0, 10) >= r.from && bd.startedAt.slice(0, 10) <= r.to)
+    .sort((x, y) => (x.startedAt < y.startedAt ? 1 : -1));
+  const rows = inRange.map((bd) => ({
+    startedAt: bd.startedAt.slice(0, 16).replace('T', ' '), restoredAt: bd.restoredAt ? bd.restoredAt.slice(0, 16).replace('T', ' ') : '',
+    status: bd.status, fault: bd.fault,
+  }));
+  const metrics = computeMetrics(bds, r.from, r.to, 1, e.criticality === 'critical' ? 1 : 0);
+  return { title: `Equipment history: ${e.name}`, subtitle: `${r.from} to ${r.to}`,
+    columns: [{ key: 'startedAt', header: 'Started', width: 20 }, { key: 'restoredAt', header: 'Restored', width: 20 },
+      { key: 'status', header: 'Status' }, { key: 'fault', header: 'Fault', width: 40 }],
+    rows,
+    meta: { reported: metrics.reported, restored: metrics.restored, downtimeHrs: metrics.downtimeHrs, mttrHrs: metrics.mttrHrs,
+      availabilityPct: metrics.availabilityPct } };
+}
+
+/** v1.1 RPT-15: downtime/availability rolled up by equipment over the range (MNT-10). */
+export function downtimeSummary(b: Bundle, from?: string, to?: string): ReportTable {
+  const r = range(b, from, to);
+  const equipment = b.settings.maintenance.equipment.filter((e) => e.isActive);
+  const rows = equipment.map((e) => {
+    const bds = b.settings.maintenance.breakdowns.filter((bd) => bd.equipmentId === e.id);
+    const downtimeHrs = downtimeHoursInPeriod(bds, r.from, r.to);
+    const m = computeMetrics(bds, r.from, r.to, 1, 1);
+    return { equipment: e.name, criticality: e.criticality, breakdowns: m.reported,
+      downtimeHrs: Math.round(downtimeHrs * 100) / 100,
+      availabilityPct: m.availabilityPct === null ? null : Math.round(m.availabilityPct * 10000) / 100,
+      openNow: bds.filter((bd) => openAsOf(bd, r.to)).length };
+  }).sort((x, y) => y.downtimeHrs - x.downtimeHrs);
+  return { title: 'Downtime summary by equipment', subtitle: `${r.from} to ${r.to}`,
+    columns: [{ key: 'equipment', header: 'Equipment', width: 24 }, { key: 'criticality', header: 'Criticality' },
+      { key: 'breakdowns', header: 'Breakdowns', numFmt: NUM0 }, { key: 'downtimeHrs', header: 'Downtime (hrs)', numFmt: NUM2 },
+      { key: 'availabilityPct', header: 'Availability %', numFmt: NUM2 }, { key: 'openNow', header: 'Open now', numFmt: NUM0 }],
+    rows };
 }

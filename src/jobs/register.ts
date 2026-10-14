@@ -1,6 +1,7 @@
 import '../modules/engine/derived.job';
 import '../modules/pdf/pdf.jobs';
 import '../modules/notifications/alerts.jobs';
+import '../modules/notifications/breakdown-alerts.jobs';
 import '../modules/imports/imports.jobs';
 import '../modules/exports/exports.jobs';
 import '../modules/billing/invoices.jobs';

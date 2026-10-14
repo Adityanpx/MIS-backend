@@ -38,6 +38,24 @@ export function misHtml(m: MisReport, meta: { version: number; platform: string;
   const safety = m.safety.rows.map((s) => `<tr><td>${esc(s.item)}</td><td class="num">${s.required}</td><td class="num">${n(s.actual)}</td>
       <td class="num ${cls(s.deficitFlag)}">${n(s.deficit)}</td></tr>`).join('');
   const head = '<th>STD</th><th>ACT</th><th>VAR</th>';
+  // v1.1 (C4/C5): a sixth section, only present when the plant has maintenance on — stays on the one A3 page.
+  const maint = m.tabs.maintenance;
+  const maintenanceSection = maint ? `<div class="grid" style="grid-template-columns: 1fr 1fr 1fr">
+      <section><h3>F. MACHINERY BREAKDOWN – OPEN NOW</h3><table><tr><th>Equipment</th><th>Criticality</th><th>Since</th><th>Status</th><th>Fault</th></tr>
+        ${maint.openBreakdowns.map((b) => `<tr><td>${esc(b.equipmentName)}</td><td class="${b.criticality === 'critical' ? 'bad' : ''}">${esc(b.criticality)}</td>
+          <td>${dt(b.startedAt.slice(0, 10))}</td><td>${esc(b.status)}</td><td>${esc(b.fault)}</td></tr>`).join('')
+          || '<tr><td colspan="5" class="muted">No open breakdowns</td></tr>'}</table></section>
+      <section><h3>F. MAINTENANCE – SUMMARY</h3><table><tr><th>Metric</th><th>MTD</th><th>UTD</th></tr>
+        <tr><td>Breakdowns reported</td><td class="num">${n(maint.metrics.mtd.reported, 0)}</td><td class="num">${n(maint.metrics.utd.reported, 0)}</td></tr>
+        <tr><td>Breakdowns restored</td><td class="num">${n(maint.metrics.mtd.restored, 0)}</td><td class="num">${n(maint.metrics.utd.restored, 0)}</td></tr>
+        <tr><td>Downtime (hrs)</td><td class="num">${n(maint.metrics.mtd.downtimeHrs, 1)}</td><td class="num">${n(maint.metrics.utd.downtimeHrs, 1)}</td></tr>
+        <tr><td>MTTR (hrs)</td><td class="num">${n(maint.metrics.mtd.mttrHrs, 1)}</td><td class="num">${n(maint.metrics.utd.mttrHrs, 1)}</td></tr>
+        <tr><td>Availability</td><td class="num">${pctText(maint.metrics.mtd.availabilityPct)}</td><td class="num">${pctText(maint.metrics.utd.availabilityPct)}</td></tr>
+        <tr><td>Critical open</td><td class="num ${maint.summary.criticalOpen > 0 ? 'bad' : ''}" colspan="2">${n(maint.summary.criticalOpen, 0)}</td></tr></table></section>
+      <section><h3>F. TOP DOWNTIME (MTD)</h3><table><tr><th>Equipment</th><th>Hours</th></tr>
+        ${maint.topByDowntimeMtd.map((t) => `<tr><td>${esc(t.equipmentName)}</td><td class="num">${n(t.hours, 1)}</td></tr>`).join('')
+          || '<tr><td colspan="2" class="muted">No downtime this month</td></tr>'}</table></section>
+    </div>` : '';
   return `<!doctype html><html><head><meta charset="utf-8"><style>${BASE_CSS}
     @page { size: A3 landscape; margin: 8mm; } body { font-size: 9.5px; }
     .hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -65,6 +83,7 @@ export function misHtml(m: MisReport, meta: { version: number; platform: string;
         <tr><th>Total</th><th>${n(m.staff.total.contract)}</th><th>${n(m.staff.total.vacant)}</th><th>${n(m.staff.total.present)}</th><th>${n(m.staff.total.leave)}</th><th>${n(m.staff.total.absent)}</th></tr></table></section>
       <section><h3>E. SAFETY ITEMS</h3><table><tr><th>Item</th><th>Required</th><th>Actual</th><th>Deficit</th></tr>${safety}
         <tr><th>Total</th><th>${n(m.safety.total.required)}</th><th>${n(m.safety.total.actual)}</th><th>${n(m.safety.total.deficit)}</th></tr></table></section></div>
+    ${maintenanceSection}
     ${footer({ generatedAt: m.meta.generatedAt, version: meta.version, status: h.logsheet ? `${h.logsheet.status} v${h.logsheet.version}` : 'No logsheet', platform: meta.platform })}
   </body></html>`;
 }
