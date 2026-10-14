@@ -1,16 +1,20 @@
 import { many, one } from '../../db/sql';
 import type { Tx } from '../../db/tenant';
 import { addDays } from '../../lib/dates';
-import type { DayRecord, EngineData, EngineSettings, ParamDef } from './core/types';
+import type { StandardKind } from '../../shared/enums';
+import type {
+  BreakdownRecord, DayRecord, EngineData, EngineSettings, EquipmentDef, MaintenanceSettings, ParamDef,
+} from './core/types';
 
 const n = (v: string | null) => (v === null ? null : Number(v));
 
 export async function loadSettings(tx: Tx, tenantId: string, plantId: string): Promise<EngineSettings> {
-  const p = await one<Record<string, string | number | null>>(tx,
+  const p = await one<Record<string, string | number | boolean | null>>(tx,
     `SELECT p.id, p.code, p.name, p.type, p.capacity_mld, p.om_start, p.om_end, p.om_tenure_months, p.mis_start,
             s.end_customer_name, s.report_company_name, s.logsheet_title, s.dashboard_title, s.tagline, s.sig_prepared_label,
             s.sig_checked_label, s.sig_verified_label, s.pdf_prefix_mis, s.avg_divisor, s.cash_opening, s.cash_opening_date,
-            s.cash_alert_limit, c.legal_name
+            s.cash_alert_limit, s.primary_standard, s.standards_shown, s.results_display, s.tab_labels, s.maintenance_settings,
+            c.legal_name
        FROM app.plants p JOIN app.plant_settings s ON s.tenant_id = p.tenant_id AND s.plant_id = p.id
        JOIN app.clients c ON c.id = p.tenant_id
       WHERE p.tenant_id = $1 AND p.id = $2`, [tenantId, plantId]);
@@ -18,12 +22,18 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
     `SELECT id, code, name, short_name, group_key, unit, input_mode, formula, decimals, hard_min, hard_max, aggregation, std_type,
             direction, event_rule, result_noun, link_role, stock_item_id, staff_category_id, safety_item_id, logsheet_block,
             logsheet_order, mis_section, mis_order, dashboard_card, dashboard_order, chart_type, chart_metric, mandatory,
-            active_from, active_to
+            active_from, active_to, monitoring_tab, result_display
        FROM app.parameters WHERE tenant_id = $1 AND plant_id = $2 ORDER BY logsheet_block, logsheet_order`, [tenantId, plantId]);
-  const standards = await many<{ parameter_id: string; effective_from: string; std_value: string | null; monthly_allowance: string | null; limit_min: string | null; limit_max: string | null }>(tx,
-    `SELECT s.parameter_id, s.effective_from, s.std_value, s.monthly_allowance, s.limit_min, s.limit_max
+  const standards = await many<{ parameter_id: string; kind: StandardKind; effective_from: string; std_value: string | null;
+    monthly_allowance: string | null; limit_min: string | null; limit_max: string | null; inherit_from_kind: StandardKind | null }>(tx,
+    `SELECT s.parameter_id, s.kind, s.effective_from, s.std_value, s.monthly_allowance, s.limit_min, s.limit_max, s.inherit_from_kind
        FROM app.parameter_standards s JOIN app.parameters p ON p.tenant_id = s.tenant_id AND p.id = s.parameter_id
       WHERE s.tenant_id = $1 AND p.plant_id = $2`, [tenantId, plantId]);
+  const standardsOfKind = (paramId: string, kind: StandardKind) =>
+    standards.filter((s) => s.parameter_id === paramId && s.kind === kind).map((s) => ({
+      from: s.effective_from, kind: s.kind, std: n(s.std_value), monthly: n(s.monthly_allowance),
+      min: n(s.limit_min), max: n(s.limit_max), inheritFromKind: s.inherit_from_kind,
+    }));
   const defs: ParamDef[] = params.map((r) => ({
     id: r.id as string, code: r.code as string, name: r.name as string, shortName: r.short_name as string | null,
     group: r.group_key as string, unit: r.unit as string, inputMode: r.input_mode as ParamDef['inputMode'],
@@ -38,9 +48,8 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
     dashboardCard: r.dashboard_card as boolean, dashboardOrder: (r.dashboard_order as number | null) ?? 99,
     chartType: r.chart_type as string, chartMetric: r.chart_metric as string | null, mandatory: r.mandatory as boolean,
     activeFrom: r.active_from as string | null, activeTo: r.active_to as string | null,
-    standards: standards.filter((s) => s.parameter_id === r.id).map((s) => ({
-      from: s.effective_from, std: n(s.std_value), monthly: n(s.monthly_allowance), min: n(s.limit_min), max: n(s.limit_max),
-    })),
+    monitoringTab: r.monitoring_tab as ParamDef['monitoringTab'], resultDisplayOverride: r.result_display as ParamDef['resultDisplayOverride'],
+    standardsByKind: { bidding: standardsOfKind(r.id as string, 'bidding'), actual: standardsOfKind(r.id as string, 'actual') },
   }));
   const misStart = p.mis_start as string;
   const constants: EngineSettings['constants'] = {};
@@ -87,8 +96,9 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
   const years = await many<{ id: string; year_no: number; start_date: string; end_date: string; days: number; fixed_fee: string; fee_configured: boolean }>(tx,
     'SELECT id, year_no, start_date, end_date, days, fixed_fee, fee_configured FROM app.contract_years WHERE tenant_id = $1 AND plant_id = $2 ORDER BY year_no',
     [tenantId, plantId]);
-  const comps = await many<{ contract_year_id: string; name: string; code: string; rate: string; std_qty_per_day: string }>(tx,
-    `SELECT c.contract_year_id, c.name, p.code, c.rate, c.std_qty_per_day FROM app.revenue_components c
+  const comps = await many<{ contract_year_id: string; name: string; code: string; rate: string; std_qty_per_day: string;
+    actual_std_qty_per_day: string | null }>(tx,
+    `SELECT c.contract_year_id, c.name, p.code, c.rate, c.std_qty_per_day, c.actual_std_qty_per_day FROM app.revenue_components c
        JOIN app.parameters p ON p.tenant_id = c.tenant_id AND p.id = c.parameter_id WHERE c.tenant_id = $1 AND p.plant_id = $2`,
     [tenantId, plantId]);
   const bgs = await many<Record<string, string | number | null>>(tx,
@@ -97,6 +107,29 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
   const ins = await many<Record<string, string | number | null>>(tx,
     'SELECT policy_type, policy_number, insurer, start_date, end_date, sum_assured, premium FROM app.insurance_policies WHERE tenant_id = $1 AND plant_id = $2',
     [tenantId, plantId]);
+  const maintenanceSettings = (p.maintenance_settings ?? {}) as Partial<MaintenanceSettings>;
+  const equipmentRows = await many<{ id: string; code: string; name: string; category: string; criticality: string;
+    standby: string; status: string; is_active: boolean }>(tx,
+    `SELECT id, code, name, category, criticality, standby, status, is_active
+       FROM app.equipment WHERE tenant_id = $1 AND plant_id = $2 ORDER BY criticality, name`, [tenantId, plantId]);
+  const equipment: EquipmentDef[] = equipmentRows.map((e) => ({
+    id: e.id, code: e.code, name: e.name, category: e.category, criticality: e.criticality as EquipmentDef['criticality'],
+    standby: e.standby as EquipmentDef['standby'], status: e.status as EquipmentDef['status'], isActive: e.is_active,
+  }));
+  const breakdownRows = await many<{ id: string; equipment_id: string; equipment_code: string; equipment_name: string;
+    criticality: string; started_at: string; restored_at: string | null; status: string; impact: string;
+    cause_category: string | null; expected_restore_on: string | null; fault: string }>(tx,
+    `SELECT b.id, b.equipment_id, e.code AS equipment_code, e.name AS equipment_name, e.criticality,
+            b.started_at, b.restored_at, b.status, b.impact, b.cause_category, b.expected_restore_on, b.fault
+       FROM app.breakdowns b JOIN app.equipment e ON e.tenant_id = b.tenant_id AND e.id = b.equipment_id
+      WHERE b.tenant_id = $1 AND b.plant_id = $2 AND b.status <> 'cancelled'
+      ORDER BY b.started_at`, [tenantId, plantId]);
+  const breakdowns: BreakdownRecord[] = breakdownRows.map((b) => ({
+    id: b.id, equipmentId: b.equipment_id, equipmentCode: b.equipment_code, equipmentName: b.equipment_name,
+    criticality: b.criticality as BreakdownRecord['criticality'], startedAt: b.started_at, restoredAt: b.restored_at,
+    status: b.status, impact: b.impact as BreakdownRecord['impact'],
+    causeCategory: b.cause_category as BreakdownRecord['causeCategory'], expectedRestoreOn: b.expected_restore_on, fault: b.fault,
+  }));
   return {
     plant: { id: plantId, code: p.code as string, name: p.name as string, type: p.type as string, capacityMld: Number(p.capacity_mld),
       omStart: p.om_start as string, omEnd: p.om_end as string, tenureMonths: p.om_tenure_months as number, misStart },
@@ -111,7 +144,10 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
     constants, params: defs, stock, staff, safety,
     contractYears: years.map((y) => ({ yearNo: y.year_no, start: y.start_date, end: y.end_date, days: y.days,
       fixedFee: Number(y.fixed_fee), feeConfigured: y.fee_configured,
-      components: comps.filter((c) => c.contract_year_id === y.id).map((c) => ({ name: c.name, paramCode: c.code, rate: Number(c.rate), stdQtyPerDay: Number(c.std_qty_per_day) })) })),
+      components: comps.filter((c) => c.contract_year_id === y.id).map((c) => ({
+        name: c.name, paramCode: c.code, rate: Number(c.rate), stdQtyPerDay: Number(c.std_qty_per_day),
+        actualStdQtyPerDay: c.actual_std_qty_per_day === null ? null : Number(c.actual_std_qty_per_day),
+      })) })),
     cash: { opening: Number(p.cash_opening), openingDate: (p.cash_opening_date as string | null) ?? addDays(misStart, -1),
       alertLimit: n(p.cash_alert_limit as string | null) },
     registers: [
@@ -122,6 +158,20 @@ export async function loadSettings(tx: Tx, tenantId: string, plantId: string): P
         party: r.insurer as string, start: r.start_date as string, end: r.end_date as string, amount: null, claimMonths: null,
         premium: n(r.premium as string | null), sumAssured: n(r.sum_assured as string | null) })),
     ],
+    primaryStandard: p.primary_standard as EngineSettings['primaryStandard'],
+    standardsShown: p.standards_shown as EngineSettings['standardsShown'],
+    resultsDisplay: p.results_display as EngineSettings['resultsDisplay'],
+    tabLabels: (p.tab_labels ?? {}) as EngineSettings['tabLabels'],
+    maintenance: {
+      enabled: maintenanceSettings.enabled ?? false,
+      reviewTickRequired: maintenanceSettings.reviewTickRequired ?? true,
+      longOpenAlertDays: maintenanceSettings.longOpenAlertDays ?? 3,
+      criticalLongOpenDays: maintenanceSettings.criticalLongOpenDays ?? 1,
+      repeatThreshold: maintenanceSettings.repeatThreshold ?? 3,
+      repeatWindowDays: maintenanceSettings.repeatWindowDays ?? 90,
+      criticalAlertEnabled: maintenanceSettings.criticalAlertEnabled ?? true,
+      equipment, breakdowns,
+    },
   };
 }
 

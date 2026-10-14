@@ -85,19 +85,24 @@ export function computeDerived(s: EngineSettings, data: EngineData, toDate: ISOD
     // revenue
     let revFp = 0;
     let revStd = 0;
+    let revStdActual = 0;
     let revAct = 0;
     const year = d >= s.plant.misStart ? s.contractYears.find((y) => d >= y.start && d <= y.end) : undefined;
     if (year) {
       revFp = year.fixedFee / year.days;
       revStd = revFp;
+      revStdActual = revFp;
       revAct = revFp;
       for (const c of year.components) {
         revStd += c.rate * c.stdQtyPerDay;
+        // v1.1: an independent "Actual" quantity per component, defaulting to the Bidding (contract) quantity
+        // when unset — so a plant that never configures it keeps revStdActual === revStd (no behaviour change).
+        revStdActual += c.rate * (c.actualStdQtyPerDay ?? c.stdQtyPerDay);
         const actual = rec ? (num(rec.values[c.paramCode]) ?? calc[c.paramCode] ?? 0) : 0;
         revAct += c.rate * actual;
       }
     }
-    const day: DerivedDay = { calc, stock, cash: cash ?? 0, absent, revFp, revStd, revAct, hasData: !!rec };
+    const day: DerivedDay = { calc, stock, cash: cash ?? 0, absent, revFp, revStd, revStdActual, revAct, hasData: !!rec };
     out.set(d, day);
     d = addDays(d, 1);
   }

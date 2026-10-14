@@ -1,3 +1,4 @@
+import type { StandardKind } from '../../../shared/enums';
 import { isActive, standardAt, valueAt } from './effective';
 import { dayValue } from './derive';
 import { eachDay, monthAnchors, type Period, type Periods } from './periods';
@@ -13,22 +14,22 @@ export function flagFor(direction: ParamDef['direction'], variance: number | nul
   return 'neutral';
 }
 
-/** Per-day standard of a parameter (safety → required qty, others → std_value). */
-export function dailyStd(s: EngineSettings, p: ParamDef, d: ISODate): number | null {
+/** Per-day standard of a parameter (safety → required qty, others → std_value). `kind` picks Bidding or Actual. */
+export function dailyStd(s: EngineSettings, p: ParamDef, d: ISODate, kind: StandardKind): number | null {
   if (p.stdType === 'required_qty' && p.safetyItemId) {
     const item = s.safety.find((x) => x.id === p.safetyItemId);
     return item ? valueAt(item.required, d) ?? null : null;
   }
-  return standardAt(p, d)?.std ?? null;
+  return standardAt(p, d, kind)?.std ?? null;
 }
 
-export function eventOn(s: EngineSettings, p: ParamDef, d: ISODate, value: number): boolean {
+export function eventOn(s: EngineSettings, p: ParamDef, d: ISODate, value: number, kind: StandardKind): boolean {
   if (p.eventRule === 'none') return false;
   if (p.eventRule === 'outside_range') {
-    const st = standardAt(p, d);
+    const st = standardAt(p, d, kind);
     return (st?.min != null && value < st.min) || (st?.max != null && value > st.max);
   }
-  const std = dailyStd(s, p, d);
+  const std = dailyStd(s, p, d, kind);
   if (std === null) return false;
   return p.eventRule === 'above_std' ? value > std : value < std;
 }
@@ -46,20 +47,22 @@ export function actual(data: EngineData, derived: DerivedMap, p: ParamDef, perio
   return p.aggregation === 'avg' ? sum / vals.length : sum;
 }
 
-/** STD over a period: per-day standards summed day by day; monthly allowances per §13.2. */
-export function standard(s: EngineSettings, p: ParamDef, period: Period, kind: 'today' | 'mtd' | 'utd', periods: Periods): number | null {
+/** STD over a period: per-day standards summed day by day; monthly allowances per §13.2. `kind` picks Bidding or Actual. */
+export function standard(
+  s: EngineSettings, p: ParamDef, period: Period, periodKind: 'today' | 'mtd' | 'utd', periods: Periods, kind: StandardKind,
+): number | null {
   if (p.stdType === 'monthly_allowance') {
-    if (kind === 'today') return standardAt(p, period.to)?.std ?? null;
-    if (kind === 'mtd') return standardAt(p, period.to)?.monthly ?? null;
+    if (periodKind === 'today') return standardAt(p, period.to, kind)?.std ?? null;
+    if (periodKind === 'mtd') return standardAt(p, period.to, kind)?.monthly ?? null;
     let sum = 0;
-    for (const a of monthAnchors(s.plant.misStart, periods.monthsElapsed)) sum += standardAt(p, a)?.monthly ?? 0;
+    for (const a of monthAnchors(s.plant.misStart, periods.monthsElapsed)) sum += standardAt(p, a, kind)?.monthly ?? 0;
     return sum;
   }
   if (p.stdType === 'per_day' || p.stdType === 'required_qty') {
     let sum = 0;
     let any = false;
     for (const d of eachDay(period)) {
-      const v = dailyStd(s, p, d);
+      const v = dailyStd(s, p, d, kind);
       if (v !== null) {
         sum += v;
         any = true;
@@ -70,12 +73,14 @@ export function standard(s: EngineSettings, p: ParamDef, period: Period, kind: '
   return null;
 }
 
-export function events(s: EngineSettings, data: EngineData, derived: DerivedMap, p: ParamDef, period: Period): number {
+export function events(
+  s: EngineSettings, data: EngineData, derived: DerivedMap, p: ParamDef, period: Period, kind: StandardKind,
+): number {
   let n = 0;
   for (const d of eachDay(period)) {
     if (!data.days.has(d) || !isActive(p, d)) continue;
     const v = dayValue(data, derived, p.code, d);
-    if (v !== null && eventOn(s, p, d, v)) n++;
+    if (v !== null && eventOn(s, p, d, v, kind)) n++;
   }
   return n;
 }

@@ -56,6 +56,8 @@ export function buildDashboard(b: Bundle, d: ISODate, mis: MisReport = buildMis(
         type: chartType, title: `${metric === 'avg_per_day' ? 'AVG' : 'MONTHLY'} ${title.toUpperCase()} – LAST 5 MONTHS`,
         months: labels, values: monthSeries(b, p, metric, months),
       },
+      // v1.1: both standards' full result lines, so the frontend can switch what it shows per SET-10/SET-11.
+      standards: r.standards, resultDisplay: r.resultDisplay, monitoringTab: r.monitoringTab,
     };
   };
   const cards = s.params.filter((p) => p.dashboardCard && p.group !== 'lab_outlet' && p.group !== 'lab_inlet' && p.linkRole !== 'expense')
@@ -92,6 +94,14 @@ export function buildDashboard(b: Bundle, d: ISODate, mis: MisReport = buildMis(
       chart: expenseP ? { type: 'line', title: 'MONTHLY SITE CASH EXPENSES – LAST 5 MONTHS', months: labels,
         values: monthSeries(b, expenseP, 'monthly_total', months) } : null,
     },
+    // v1.1 (C5): fifth tab, only present when the plant has turned maintenance on.
+    maintenance: mis.tabs.maintenance ? {
+      openBreakdowns: mis.tabs.maintenance.openBreakdowns.length,
+      criticalOpen: mis.tabs.maintenance.summary.criticalOpen,
+      restoredToday: mis.tabs.maintenance.summary.restoredToday,
+      availabilityMtd: mis.tabs.maintenance.summary.availabilityMtd,
+      availabilityUtd: mis.tabs.maintenance.summary.availabilityUtd,
+    } : null,
     flags: { verified: mis.header.logsheet?.status === 'verified' } as Record<string, boolean | Flag>,
   };
 }

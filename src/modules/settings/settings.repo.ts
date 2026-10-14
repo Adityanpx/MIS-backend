@@ -1,9 +1,19 @@
 import { exec, one } from '../../db/sql';
 import type { Tx } from '../../db/tenant';
+import type { MonitoringTab, ResultDisplayOverride, StandardKind } from '../../shared/enums';
 import type { TemplateParam } from './stp-template';
 
 export interface ParamLinks {
   linkRole?: string; stockItemId?: string; staffCategoryId?: string; safetyItemId?: string; activeFrom?: string;
+  monitoringTab?: MonitoringTab; resultDisplay?: ResultDisplayOverride | null;
+}
+
+/** PAR-18 default: same mapping the v1.1 migration used to backfill existing parameters. */
+function defaultMonitoringTab(p: TemplateParam): MonitoringTab {
+  if (p.misSection === 'key' || p.group === 'key') return 'key';
+  if (p.group === 'chemical') return 'chemicals';
+  if (p.group === 'lab_inlet' || p.group === 'lab_outlet') return 'compliance';
+  return 'administrative';
 }
 
 export async function insertParameter(
@@ -14,34 +24,38 @@ export async function insertParameter(
     `INSERT INTO app.parameters (tenant_id, plant_id, code, name, short_name, group_key, unit, input_mode, formula, decimals,
         hard_min, hard_max, aggregation, std_type, direction, event_rule, result_noun, link_role, stock_item_id,
         staff_category_id, safety_item_id, logsheet_block, logsheet_order, mis_section, mis_order, dashboard_card,
-        dashboard_order, chart_type, chart_metric, mandatory, active_from, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+        dashboard_order, chart_type, chart_metric, mandatory, active_from, monitoring_tab, result_display, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
      RETURNING id`,
     [tenantId, plantId, p.code, p.name, p.shortName ?? null, p.group, p.unit, p.inputMode ?? 'typed', p.formula ?? null,
       p.decimals, p.hardMin ?? null, p.hardMax ?? null, p.aggregation, p.stdType, p.direction, p.eventRule,
       p.resultNoun ?? null, links.linkRole ?? null, links.stockItemId ?? null, links.staffCategoryId ?? null,
       links.safetyItemId ?? null, p.block, p.order, p.misSection ?? null, p.misOrder ?? null, p.dashboardCard ?? false,
       p.dashboardOrder ?? null, p.chartType ?? 'none', p.chartMetric ?? null, p.mandatory ?? (p.aggregation !== 'text'),
-      links.activeFrom ?? null, actorId],
+      links.activeFrom ?? null, links.monitoringTab ?? defaultMonitoringTab(p), links.resultDisplay ?? null, actorId],
   );
   return r.id;
 }
 
-/** Same effective date = overwrite (UNIQUE tenant_id, parameter_id, effective_from). */
+/** Same (kind, effective date) = overwrite (UNIQUE tenant_id, parameter_id, kind, effective_from). Defaults kind to 'actual'
+ * so every pre-v1.1 caller (template seeding, go-live, copy-from) keeps writing the Actual series unchanged. */
 export async function upsertStandard(
   tx: Tx, tenantId: string, parameterId: string, from: string,
-  s: { std?: number | null; monthly?: number | null; min?: number | null; max?: number | null }, reason: string | null,
+  s: { std?: number | null; monthly?: number | null; min?: number | null; max?: number | null; kind?: StandardKind; inheritFromKind?: StandardKind | null },
+  reason: string | null,
   actorId: string | null,
 ): Promise<void> {
   await exec(
     tx,
-    `INSERT INTO app.parameter_standards (tenant_id, parameter_id, effective_from, std_value, monthly_allowance,
-        limit_min, limit_max, reason, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     ON CONFLICT (tenant_id, parameter_id, effective_from) DO UPDATE SET
+    `INSERT INTO app.parameter_standards (tenant_id, parameter_id, kind, effective_from, std_value, monthly_allowance,
+        limit_min, limit_max, inherit_from_kind, reason, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (tenant_id, parameter_id, kind, effective_from) DO UPDATE SET
        std_value = EXCLUDED.std_value, monthly_allowance = EXCLUDED.monthly_allowance,
-       limit_min = EXCLUDED.limit_min, limit_max = EXCLUDED.limit_max, reason = EXCLUDED.reason`,
-    [tenantId, parameterId, from, s.std ?? null, s.monthly ?? null, s.min ?? null, s.max ?? null, reason, actorId],
+       limit_min = EXCLUDED.limit_min, limit_max = EXCLUDED.limit_max,
+       inherit_from_kind = EXCLUDED.inherit_from_kind, reason = EXCLUDED.reason`,
+    [tenantId, parameterId, s.kind ?? 'actual', from, s.std ?? null, s.monthly ?? null, s.min ?? null, s.max ?? null,
+      s.inheritFromKind ?? null, reason, actorId],
   );
 }
 

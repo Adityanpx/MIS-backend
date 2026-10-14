@@ -62,8 +62,8 @@ export function validateValues(s: EngineSettings, derived: DerivedMap, d: string
       errors.push({ code: p.code, parameterId: p.id, message: 'Must be a whole number' });
     }
     // soft: event rule, and warning limits on non-range parameters (e.g. PF < 0.95)
-    if (eventOn(s, p, d, v)) warnings.push({ code: p.code, parameterId: p.id, message: `${p.name}: ${v} is outside the standard` });
-    const st = standardAt(p, d);
+    if (eventOn(s, p, d, v, s.primaryStandard)) warnings.push({ code: p.code, parameterId: p.id, message: `${p.name}: ${v} is outside the standard` });
+    const st = standardAt(p, d, s.primaryStandard);
     if (p.stdType !== 'range' && st && ((st.min !== null && v < st.min) || (st.max !== null && v > st.max))) {
       warnings.push({ code: p.code, parameterId: p.id, message: `${p.name}: ${v} is outside the warning limit` });
     }

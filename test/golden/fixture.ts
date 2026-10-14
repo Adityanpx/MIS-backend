@@ -26,6 +26,13 @@ function parseCsv(text: string): Array<Record<string, string>> {
 }
 export const goldenRows = () => parseCsv(fs.readFileSync(path.join(__dirname, '../../test-data/MIS_daily_data_golden.csv'), 'utf8'));
 
+const monitoringTabOf = (group: string, misSection: string | null | undefined): ParamDef['monitoringTab'] => {
+  if (misSection === 'key' || group === 'key') return 'key';
+  if (group === 'chemical') return 'chemicals';
+  if (group === 'lab_inlet' || group === 'lab_outlet') return 'compliance';
+  return 'administrative';
+};
+
 let seq = 0;
 const def = (t: TemplateParam, links: Partial<ParamDef> = {}): ParamDef => ({
   id: `p${++seq}`, code: t.code, name: t.name, shortName: t.shortName ?? null, group: t.group, unit: t.unit,
@@ -34,7 +41,14 @@ const def = (t: TemplateParam, links: Partial<ParamDef> = {}): ParamDef => ({
   linkRole: null, stockItemId: null, staffCategoryId: null, safetyItemId: null, block: t.block, order: t.order,
   misSection: t.misSection ?? null, misOrder: t.misOrder ?? 99, dashboardCard: t.dashboardCard ?? false, dashboardOrder: t.dashboardOrder ?? 99,
   chartType: t.chartType ?? 'none', chartMetric: t.chartMetric ?? null, mandatory: t.mandatory ?? true, activeFrom: null, activeTo: null,
-  standards: t.standard ? [{ from: MIS_START, std: t.standard.std ?? null, monthly: t.standard.monthly ?? null, min: t.standard.min ?? null, max: t.standard.max ?? null }] : [],
+  monitoringTab: monitoringTabOf(t.group, t.misSection), resultDisplayOverride: null,
+  standardsByKind: {
+    bidding: [],
+    actual: t.standard
+      ? [{ from: MIS_START, kind: 'actual', std: t.standard.std ?? null, monthly: t.standard.monthly ?? null,
+          min: t.standard.min ?? null, max: t.standard.max ?? null, inheritFromKind: null }]
+      : [],
+  },
   ...links,
 });
 
@@ -107,7 +121,7 @@ export function goldenInput(): { settings: EngineSettings; data: EngineData } {
     params, stock, staff, safety,
     contractYears: buildContractYears('2022-09-01', 60).map((y, i) => ({
       yearNo: y.yearNo, start: y.startDate, end: y.endDate, days: y.days, fixedFee: fees[i]!, feeConfigured: true,
-      components: [{ name: 'BGE power payment', paramCode: 'BGE_KWH', rate: 4.14, stdQtyPerDay: bgeStd[i]! }],
+      components: [{ name: 'BGE power payment', paramCode: 'BGE_KWH', rate: 4.14, stdQtyPerDay: bgeStd[i]!, actualStdQtyPerDay: null }],
     })),
     cash: { opening: n(first.cash_balance) + n(first.cash_expensed) - n(first.cash_received), openingDate: OPENING_DATE, alertLimit: 1500 },
     registers: [
@@ -115,6 +129,11 @@ export function goldenInput(): { settings: EngineSettings; data: EngineData } {
       { kind: 'insurance', label: 'WC', number: '4010/264218974/02/000', party: 'ICICI', start: '2024-09-10', end: '2027-09-09', amount: null, claimMonths: null, premium: 18285, sumAssured: 12024000 },
       { kind: 'insurance', label: 'FIRE', number: 'D153959120', party: 'GO DIGIT', start: '2024-06-28', end: '2027-06-27', amount: null, claimMonths: null, premium: 65016, sumAssured: 110000000 },
     ],
+    primaryStandard: 'actual', standardsShown: 'both', resultsDisplay: 'both', tabLabels: {},
+    maintenance: {
+      enabled: false, reviewTickRequired: true, longOpenAlertDays: 3, criticalLongOpenDays: 1,
+      repeatThreshold: 3, repeatWindowDays: 90, criticalAlertEnabled: true, equipment: [], breakdowns: [],
+    },
   };
   const days = new Map<string, DayRecord>();
   for (const r of rows) {

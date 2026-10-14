@@ -1,11 +1,20 @@
 import { addDays, addMonths } from '../../../lib/dates';
 import { EXPIRING_ALERT_DAYS } from '../../../config/constants';
+import type { MonitoringTab, ResultMode, StandardKind } from '../../../shared/enums';
 import { standardAt, valueAt } from './effective';
 import { dayValue } from './derive';
+import { buildMaintenanceTab, type MaintenanceTab } from './maintenance';
 import { eachDay, periodsFor, type Period, type Periods } from './periods';
 import { actual, dataDays, events, flagFor, pct, resultText, standard, triple, type Triple } from './stats';
 import type { DerivedMap, EngineData, EngineSettings, Flag, ISODate, ParamDef, RegisterDef } from './types';
 
+export interface ResultLine { qty: number | null; pct: number | null; text: string | null; flag: Flag }
+/** v1.1 (C2): one kind's (Bidding or Actual) full set of results for a parameter. */
+export interface PerKind {
+  today: Triple; mtd: Triple; utd: Triple;
+  events: { mtd: number; utd: number; flag: Flag };
+  results: { today: ResultLine; mtd: ResultLine; utd: ResultLine };
+}
 export interface ParamRowOut {
   code: string; name: string; unit: string; decimals: number; direction: string;
   today: Triple; mtd: Triple; utd: Triple;
@@ -13,6 +22,11 @@ export interface ParamRowOut {
   events: { mtd: number; utd: number; flag: Flag };
   utdResult: { pct: number | null; text: string | null; flag: Flag };
   mtdPct: number | null;
+  // --- v1.1 additions (additive only — the fields above never change shape or meaning) ---
+  monitoringTab: MonitoringTab;
+  resultDisplay: ResultMode;
+  standards: { bidding: PerKind; actual: PerKind };
+  primaryKind: StandardKind;
 }
 export interface Bundle { settings: EngineSettings; data: EngineData; derived: DerivedMap }
 
@@ -22,50 +36,93 @@ function avgPerDay(b: Bundle, act: number | null, period: Period): number | null
   return days > 0 ? act / days : null;
 }
 
+const mkResult = (t: Triple, resultNoun: string | null, direction: ParamDef['direction']): ResultLine => {
+  const p = pct(t.var, t.std);
+  return { qty: t.var, pct: p, text: resultText(p, resultNoun), flag: flagFor(direction, t.var) };
+};
+
+function perKind(b: Bundle, p: ParamDef, per: Periods, kind: StandardKind): PerKind {
+  const s = b.settings;
+  const today = triple(
+    standard(s, p, per.today, 'today', per, kind),
+    b.data.days.has(per.reportDate) ? actual(b.data, b.derived, p, per.today) : null,
+    p.direction,
+  );
+  const mtd = triple(standard(s, p, per.mtd, 'mtd', per, kind), actual(b.data, b.derived, p, per.mtd), p.direction);
+  const utd = triple(standard(s, p, per.utd, 'utd', per, kind), actual(b.data, b.derived, p, per.utd), p.direction);
+  const ev = { mtd: events(s, b.data, b.derived, p, per.mtd, kind), utd: events(s, b.data, b.derived, p, per.utd, kind) };
+  return {
+    today, mtd, utd,
+    events: { ...ev, flag: ev.mtd + ev.utd > 0 ? 'bad' : 'ok' },
+    results: { today: mkResult(today, p.resultNoun, p.direction), mtd: mkResult(mtd, p.resultNoun, p.direction), utd: mkResult(utd, p.resultNoun, p.direction) },
+  };
+}
+/** Resolves PAR-19: a parameter's own override, 'none' meaning "inherit the plant default". */
+function resolveResultDisplay(p: ParamDef, s: EngineSettings): ResultMode {
+  if (p.resultDisplayOverride && p.resultDisplayOverride !== 'none') return p.resultDisplayOverride;
+  return s.resultsDisplay;
+}
+
 export function paramRow(b: Bundle, p: ParamDef, per: Periods): ParamRowOut {
   const s = b.settings;
-  const t = triple(standard(s, p, per.today, 'today', per), b.data.days.has(per.reportDate) ? actual(b.data, b.derived, p, per.today) : null, p.direction);
-  const m = triple(standard(s, p, per.mtd, 'mtd', per), actual(b.data, b.derived, p, per.mtd), p.direction);
-  const u = triple(standard(s, p, per.utd, 'utd', per), actual(b.data, b.derived, p, per.utd), p.direction);
-  const ev = { mtd: events(s, b.data, b.derived, p, per.mtd), utd: events(s, b.data, b.derived, p, per.utd) };
-  const up = pct(u.var, u.std);
+  const bidding = perKind(b, p, per, 'bidding');
+  const act = perKind(b, p, per, 'actual');
+  const primary = s.primaryStandard === 'bidding' ? bidding : act;
   return {
     code: p.code, name: p.shortName ?? p.name, unit: p.unit, decimals: p.decimals, direction: p.direction,
-    today: t, mtd: m, utd: u,
-    avgPerDay: p.aggregation === 'sum' ? { mtd: avgPerDay(b, m.act, per.mtd), utd: avgPerDay(b, u.act, per.utd) } : { mtd: m.act, utd: u.act },
-    events: { ...ev, flag: ev.mtd + ev.utd > 0 ? 'bad' : 'ok' },
-    utdResult: { pct: up, text: resultText(up, p.resultNoun), flag: flagFor(p.direction, u.var) },
-    mtdPct: pct(m.var, m.std),
+    today: primary.today, mtd: primary.mtd, utd: primary.utd,
+    avgPerDay: p.aggregation === 'sum'
+      ? { mtd: avgPerDay(b, primary.mtd.act, per.mtd), utd: avgPerDay(b, primary.utd.act, per.utd) }
+      : { mtd: primary.mtd.act, utd: primary.utd.act },
+    events: primary.events,
+    utdResult: { pct: primary.results.utd.pct, text: primary.results.utd.text, flag: primary.results.utd.flag },
+    mtdPct: primary.results.mtd.pct,
+    monitoringTab: p.monitoringTab, resultDisplay: resolveResultDisplay(p, s),
+    standards: { bidding, actual: act }, primaryKind: s.primaryStandard,
   };
 }
 
 /** Revenue row in ₹ million (§13.10). Events = days with a logsheet where ACT_REV < STD_REV (fix D10). */
 export function revenueRow(b: Bundle, per: Periods): ParamRowOut {
-  const sum = (p: Period, k: 'revStd' | 'revAct') => {
+  const s = b.settings;
+  const sum = (p: Period, k: 'revStd' | 'revStdActual' | 'revAct') => {
     let x = 0;
     for (const d of eachDay(p)) x += b.derived.get(d)?.[k] ?? 0;
     return x / 1e6;
   };
-  const ev = (p: Period) => {
+  const stdKey = (kind: StandardKind): 'revStd' | 'revStdActual' => (kind === 'bidding' ? 'revStd' : 'revStdActual');
+  const ev = (p: Period, kind: StandardKind) => {
     let n = 0;
     for (const d of eachDay(p)) {
       const dd = b.derived.get(d);
-      if (dd?.hasData && dd.revAct < dd.revStd) n++;
+      if (dd?.hasData && dd.revAct < (kind === 'bidding' ? dd.revStd : dd.revStdActual)) n++;
     }
     return n;
   };
-  const mk = (p: Period) => triple(sum(p, 'revStd'), sum(p, 'revAct'), 'higher_better');
-  const m = mk(per.mtd);
-  const u = mk(per.utd);
-  const up = pct(u.var, u.std);
-  const e = { mtd: ev(per.mtd), utd: ev(per.utd) };
+  const mkKind = (kind: StandardKind): PerKind => {
+    const mk = (p: Period) => triple(sum(p, stdKey(kind)), sum(p, 'revAct'), 'higher_better');
+    const today = mk(per.today);
+    const mtd = mk(per.mtd);
+    const utd = mk(per.utd);
+    const e = { mtd: ev(per.mtd, kind), utd: ev(per.utd, kind) };
+    return {
+      today, mtd, utd, events: { ...e, flag: e.mtd + e.utd > 0 ? 'bad' : 'ok' },
+      results: { today: mkResult(today, 'REVENUE GENERATED', 'higher_better'), mtd: mkResult(mtd, 'REVENUE GENERATED', 'higher_better'),
+        utd: mkResult(utd, 'REVENUE GENERATED', 'higher_better') },
+    };
+  };
+  const bidding = mkKind('bidding');
+  const act = mkKind('actual');
+  const primary = s.primaryStandard === 'bidding' ? bidding : act;
   return {
     code: 'REVENUE', name: 'O&M revenue', unit: '₹ million', decimals: 2, direction: 'higher_better',
-    today: mk(per.today), mtd: m, utd: u,
-    avgPerDay: { mtd: m.act === null ? null : m.act / per.mtd.days, utd: u.act === null ? null : u.act / per.utd.days },
-    events: { ...e, flag: e.mtd + e.utd > 0 ? 'bad' : 'ok' },
-    utdResult: { pct: up, text: resultText(up, 'REVENUE GENERATED'), flag: flagFor('higher_better', u.var) },
-    mtdPct: pct(m.var, m.std),
+    today: primary.today, mtd: primary.mtd, utd: primary.utd,
+    avgPerDay: { mtd: primary.mtd.act === null ? null : primary.mtd.act / per.mtd.days, utd: primary.utd.act === null ? null : primary.utd.act / per.utd.days },
+    events: primary.events,
+    utdResult: { pct: primary.results.utd.pct, text: primary.results.utd.text, flag: primary.results.utd.flag },
+    mtdPct: primary.results.mtd.pct,
+    monitoringTab: 'key', resultDisplay: s.resultsDisplay,
+    standards: { bidding, actual: act }, primaryKind: s.primaryStandard,
   };
 }
 
@@ -102,10 +159,10 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
   });
   const lab = (section: 'lab_inlet' | 'lab_outlet') =>
     active.filter((p) => p.misSection === section || p.group === section).sort((a, x) => a.misOrder - x.misOrder).map((p) => {
-      const st = standardAt(p, d);
+      const st = standardAt(p, d, s.primaryStandard);
       const act = rec ? dayValue(b.data, b.derived, p.code, d) : null;
       const exceeded = act !== null && ((st?.min != null && act < st.min) || (st?.max != null && act > st.max));
-      const ev = { mtd: events(s, b.data, b.derived, p, per.mtd), utd: events(s, b.data, b.derived, p, per.utd) };
+      const ev = { mtd: events(s, b.data, b.derived, p, per.mtd, s.primaryStandard), utd: events(s, b.data, b.derived, p, per.utd, s.primaryStandard) };
       return {
         code: p.code, name: p.shortName ?? p.name, unit: p.unit, decimals: p.decimals, min: st?.min ?? null, max: st?.max ?? null,
         act, result: act === null ? null : exceeded ? 'EXCEEDED LIMIT' : 'WITHIN LIMIT', resultFlag: (exceeded ? 'bad' : 'ok') as Flag,
@@ -142,6 +199,20 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
   const tot = <T extends Record<string, unknown>>(rows: T[], keys: (keyof T)[]) =>
     Object.fromEntries(keys.map((k) => [k, rows.reduce((a, r) => a + (Number(r[k]) || 0), 0)]));
 
+  const labTab = { inlet: lab('lab_inlet'), outlet: lab('lab_outlet') };
+  const registersTab = { bankGuarantees: regRows('bg'), insurance: regRows('insurance') };
+  const cashTab = {
+    today: rec ? sumOf(expenseP, per.today) : null, mtd: sumOf(expenseP, per.mtd), utd: sumOf(expenseP, per.utd),
+    received: rec ? sumOf(receivedP, per.today) : null, inHand: dd?.cash ?? null,
+    description: rec && descP ? (rec.values[descP.code] as string | null) ?? null : null,
+    alertLimit: s.cash.alertLimit,
+  };
+  const staffTab = { rows: staff, total: tot(staff, ['contract', 'vacant', 'present', 'leave', 'absent']) };
+  const safetyTab = { rows: safety, total: tot(safety, ['required', 'actual', 'deficit']) };
+  const maintenanceTab: MaintenanceTab | null = s.maintenance.enabled
+    ? buildMaintenanceTab(s.maintenance, per.today, per.mtd, per.utd)
+    : null;
+
   return {
     header: {
       companyName: s.display.companyName, plantName: s.plant.name, clientName: s.display.clientName,
@@ -150,20 +221,25 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
       mtdDays: per.mtd.days, utdDays: per.utd.days, mtdDataDays: dataDays(b.data, per.mtd), utdDataDays: dataDays(b.data, per.utd),
       monthsElapsed: per.monthsElapsed, lastCorrectedAt: meta.lastCorrectedAt ?? rec?.correctedAt ?? null,
       logsheet: rec ? { status: rec.status, version: rec.version, submittedBy: rec.submittedByName, submittedAt: rec.submittedAt } : null,
+      // v1.1 (SET-09..12)
+      primaryStandard: s.primaryStandard, standardsShown: s.standardsShown, resultsDisplay: s.resultsDisplay, tabLabels: s.tabLabels,
+    },
+    // v1.1 (C5): the same rows above, grouped into the five monitoring tabs.
+    tabs: {
+      key: keyParameters,
+      chemicals,
+      compliance: { lab: labTab, registers: registersTab },
+      administrative: { cash: cashTab, staff: staffTab, safety: safetyTab },
+      maintenance: maintenanceTab,
     },
     keyParameters,
     chemicals,
-    lab: { inlet: lab('lab_inlet'), outlet: lab('lab_outlet') },
-    registers: { bankGuarantees: regRows('bg'), insurance: regRows('insurance') },
-    cash: {
-      today: rec ? sumOf(expenseP, per.today) : null, mtd: sumOf(expenseP, per.mtd), utd: sumOf(expenseP, per.utd),
-      received: rec ? sumOf(receivedP, per.today) : null, inHand: dd?.cash ?? null,
-      description: rec && descP ? (rec.values[descP.code] as string | null) ?? null : null,
-      alertLimit: s.cash.alertLimit,
-    },
-    staff: { rows: staff, total: tot(staff, ['contract', 'vacant', 'present', 'leave', 'absent']) },
-    safety: { rows: safety, total: tot(safety, ['required', 'actual', 'deficit']) },
-    revenueDay: dd ? { fixedPerDay: dd.revFp, std: dd.revStd, act: dd.revAct } : null,
+    lab: labTab,
+    registers: registersTab,
+    cash: cashTab,
+    staff: staffTab,
+    safety: safetyTab,
+    revenueDay: dd ? { fixedPerDay: dd.revFp, std: dd.revStd, act: dd.revAct, stdActual: dd.revStdActual } : null,
     meta: { generatedAt: meta.generatedAt ?? new Date().toISOString() },
   };
 }

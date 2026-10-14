@@ -7,6 +7,7 @@ import { badRequest, conflict, notFound, unprocessable } from '../../lib/errors'
 import { D, money } from '../../lib/money';
 import type { RequestMeta } from '../../lib/request-meta';
 import { FormulaError, orderCalculated, parseFormula, formulaRefs } from '../../shared/formula';
+import type { MonitoringTab, ResultDisplayOverride, StandardKind } from '../../shared/enums';
 import type { ClientCtx, PlantCtx } from '../../types/express';
 import { clientActor, diff, writeAudit } from '../audit/audit.service';
 import { assertTenantKey, signedUrlOrNull, storage, tenantKey } from '../files/storage';
@@ -56,7 +57,8 @@ export async function getGeneral(ctx: Ctx, plant: PlantCtx) {
       `SELECT p.name, p.code, p.type, p.capacity_mld, p.om_start, p.om_tenure_months, p.om_end, p.mis_start, p.setup_status,
               s.end_customer_name, s.report_company_name, s.logsheet_title, s.dashboard_title, s.tagline,
               s.sig_prepared_label, s.sig_checked_label, s.sig_verified_label, s.allow_same_day, s.editor_backfill_days,
-              s.approval_enabled, s.avg_divisor, s.pdf_prefix_mis
+              s.approval_enabled, s.avg_divisor, s.pdf_prefix_mis,
+              s.primary_standard, s.standards_shown, s.results_display, s.tab_labels, s.maintenance_settings, s.v1_1_enabled
          FROM app.plants p JOIN app.plant_settings s ON s.tenant_id = p.tenant_id AND s.plant_id = p.id
         WHERE p.tenant_id = $1 AND p.id = $2`,
       [ctx.tenantId, plant.id],
@@ -69,6 +71,8 @@ export async function getGeneral(ctx: Ctx, plant: PlantCtx) {
       sigCheckedLabel: r.sig_checked_label, sigVerifiedLabel: r.sig_verified_label, allowSameDay: r.allow_same_day,
       editorBackfillDays: r.editor_backfill_days, approvalEnabled: r.approval_enabled, avgDivisor: r.avg_divisor,
       pdfPrefixMis: r.pdf_prefix_mis,
+      primaryStandard: r.primary_standard, standardsShown: r.standards_shown, resultsDisplay: r.results_display,
+      tabLabels: r.tab_labels, maintenanceSettings: r.maintenance_settings, v1_1Enabled: r.v1_1_enabled,
     };
   });
 }
@@ -100,12 +104,19 @@ export async function patchGeneral(ctx: Ctx, plant: PlantCtx, b: Record<string, 
       dashboard_title: b.dashboardTitle, tagline: b.tagline, sig_prepared_label: b.sigPreparedLabel,
       sig_checked_label: b.sigCheckedLabel, sig_verified_label: b.sigVerifiedLabel, allow_same_day: b.allowSameDay,
       editor_backfill_days: b.editorBackfillDays, avg_divisor: b.avgDivisor, pdf_prefix_mis: b.pdfPrefixMis,
+      // v1.1 (SET-09..12)
+      primary_standard: b.primaryStandard, standards_shown: b.standardsShown, results_display: b.resultsDisplay,
+      tab_labels: b.tabLabels === undefined ? undefined : JSON.stringify(b.tabLabels),
+      maintenance_settings: b.maintenanceSettings === undefined ? undefined : JSON.stringify(b.maintenanceSettings),
+      v1_1_enabled: b.v1_1Enabled,
     }, 3);
     if (set.values.length) {
       await exec(tx, `UPDATE app.plant_settings SET ${set.sql} WHERE tenant_id = $1 AND plant_id = $2`,
         [ctx.tenantId, plant.id, ...set.values]);
     }
     if (b.avgDivisor !== undefined) recalc = recalc ?? plant.misStart; // averages change everywhere
+    // v1.1: changing the primary standard, what's shown, or the maintenance switch changes report numbers/shape everywhere.
+    if (b.primaryStandard !== undefined || b.maintenanceSettings !== undefined) recalc = recalc ?? plant.misStart;
     const after = await getGeneralRow(tx, ctx, plant);
     await changed(tx, ctx, plant, meta, { action: 'settings.general_update', entity: 'plant', entityId: plant.id, ...diff(before, after) },
       recalc ?? (JSON.stringify(before) !== JSON.stringify(after) ? plant.misStart : null));
@@ -117,7 +128,8 @@ async function getGeneralRow(tx: Tx, ctx: Ctx, plant: PlantCtx): Promise<Record<
   return one(tx,
     `SELECT p.name, p.mis_start, s.end_customer_name, s.report_company_name, s.logsheet_title, s.dashboard_title, s.tagline,
             s.sig_prepared_label, s.sig_checked_label, s.sig_verified_label, s.allow_same_day, s.editor_backfill_days,
-            s.avg_divisor, s.pdf_prefix_mis
+            s.avg_divisor, s.pdf_prefix_mis,
+            s.primary_standard, s.standards_shown, s.results_display, s.tab_labels, s.maintenance_settings, s.v1_1_enabled
        FROM app.plants p JOIN app.plant_settings s ON s.tenant_id = p.tenant_id AND s.plant_id = p.id
       WHERE p.tenant_id = $1 AND p.id = $2`, [ctx.tenantId, plant.id]);
 }
@@ -125,7 +137,8 @@ async function getGeneralRow(tx: Tx, ctx: Ctx, plant: PlantCtx): Promise<Record<
 // ======================================================================= parameters (§11.2)
 const PARAM_COLS = `id, code, name, short_name, group_key, unit, input_mode, formula, decimals, hard_min, hard_max, aggregation,
   std_type, direction, event_rule, result_noun, link_role, stock_item_id, staff_category_id, safety_item_id, logsheet_block,
-  logsheet_order, mis_section, mis_order, dashboard_card, dashboard_order, chart_type, chart_metric, mandatory, active_from, active_to`;
+  logsheet_order, mis_section, mis_order, dashboard_card, dashboard_order, chart_type, chart_metric, mandatory, active_from, active_to,
+  monitoring_tab, result_display`;
 
 interface ParamRow {
   id: string; code: string; name: string; short_name: string | null; group_key: string; unit: string; input_mode: string;
@@ -135,16 +148,19 @@ interface ParamRow {
   logsheet_block: number | null; logsheet_order: number | null; mis_section: string | null; mis_order: number | null;
   dashboard_card: boolean; dashboard_order: number | null; chart_type: string; chart_metric: string | null;
   mandatory: boolean; active_from: string | null; active_to: string | null;
+  monitoring_tab: string; result_display: string | null;
 }
 const numOrNull = (v: string | null) => (v === null ? null : Number(v));
-export const toParamDto = (r: ParamRow, standards: unknown[] = []) => ({
+const EMPTY_STANDARDS = { bidding: [], actual: [] };
+export const toParamDto = (r: ParamRow, standards: { bidding: unknown[]; actual: unknown[] } = EMPTY_STANDARDS) => ({
   id: r.id, code: r.code, name: r.name, shortName: r.short_name, groupKey: r.group_key, unit: r.unit, inputMode: r.input_mode,
   formula: r.formula, decimals: r.decimals, hardMin: numOrNull(r.hard_min), hardMax: numOrNull(r.hard_max),
   aggregation: r.aggregation, stdType: r.std_type, direction: r.direction, eventRule: r.event_rule, resultNoun: r.result_noun,
   linkRole: r.link_role, stockItemId: r.stock_item_id, staffCategoryId: r.staff_category_id, safetyItemId: r.safety_item_id,
   logsheetBlock: r.logsheet_block, logsheetOrder: r.logsheet_order, misSection: r.mis_section, misOrder: r.mis_order,
   dashboardCard: r.dashboard_card, dashboardOrder: r.dashboard_order, chartType: r.chart_type, chartMetric: r.chart_metric,
-  mandatory: r.mandatory, activeFrom: r.active_from, activeTo: r.active_to, standards,
+  mandatory: r.mandatory, activeFrom: r.active_from, activeTo: r.active_to,
+  monitoringTab: r.monitoring_tab, resultDisplay: r.result_display, standards,
 });
 
 async function loadParam(tx: Tx, ctx: Ctx, plant: PlantCtx, id: string): Promise<ParamRow> {
@@ -154,15 +170,19 @@ async function loadParam(tx: Tx, ctx: Ctx, plant: PlantCtx, id: string): Promise
   return r;
 }
 const standardsOf = (tx: Tx, ctx: Ctx, paramId: string) =>
-  many<{ effective_from: string; std_value: string | null; monthly_allowance: string | null; limit_min: string | null; limit_max: string | null; reason: string | null }>(
+  many<{ kind: StandardKind; effective_from: string; std_value: string | null; monthly_allowance: string | null;
+    limit_min: string | null; limit_max: string | null; inherit_from_kind: StandardKind | null; reason: string | null }>(
     tx,
-    `SELECT effective_from, std_value, monthly_allowance, limit_min, limit_max, reason FROM app.parameter_standards
-      WHERE tenant_id = $1 AND parameter_id = $2 ORDER BY effective_from`,
+    `SELECT kind, effective_from, std_value, monthly_allowance, limit_min, limit_max, inherit_from_kind, reason FROM app.parameter_standards
+      WHERE tenant_id = $1 AND parameter_id = $2 ORDER BY kind, effective_from`,
     [ctx.tenantId, paramId],
-  ).then((rows) => rows.map((s) => ({
-    effectiveFrom: s.effective_from, std: numOrNull(s.std_value), monthly: numOrNull(s.monthly_allowance),
-    min: numOrNull(s.limit_min), max: numOrNull(s.limit_max), reason: s.reason,
-  })));
+  ).then((rows) => {
+    const toDto = (s: (typeof rows)[number]) => ({
+      effectiveFrom: s.effective_from, std: numOrNull(s.std_value), monthly: numOrNull(s.monthly_allowance),
+      min: numOrNull(s.limit_min), max: numOrNull(s.limit_max), inheritFromKind: s.inherit_from_kind, reason: s.reason,
+    });
+    return { bidding: rows.filter((r) => r.kind === 'bidding').map(toDto), actual: rows.filter((r) => r.kind === 'actual').map(toDto) };
+  });
 
 export async function listParameters(ctx: Ctx, plant: PlantCtx) {
   return withTenant(T(ctx), async (tx) => {
@@ -207,6 +227,7 @@ export async function createParameter(ctx: Ctx, plant: PlantCtx, b: {
   eventRule: string; resultNoun?: string; logsheetBlock?: number; logsheetOrder?: number; misSection?: string | null;
   misOrder?: number; dashboardCard: boolean; dashboardOrder?: number; chartType: string; chartMetric?: string | null;
   mandatory: boolean; standard?: { std?: number; monthly?: number; min?: number; max?: number };
+  monitoringTab?: MonitoringTab; resultDisplay?: ResultDisplayOverride | null;
 }, meta: RequestMeta) {
   const id = await withTenant(T(ctx), async (tx) => {
     const exists = await maybeOne(tx, 'SELECT 1 FROM app.parameters WHERE tenant_id = $1 AND plant_id = $2 AND code = $3',
@@ -222,7 +243,7 @@ export async function createParameter(ctx: Ctx, plant: PlantCtx, b: {
       block: b.logsheetBlock ?? 8, order: b.logsheetOrder ?? 99, misSection: (b.misSection ?? undefined) as never,
       misOrder: b.misOrder, dashboardCard: b.dashboardCard, dashboardOrder: b.dashboardOrder,
       chartType: b.chartType as never, chartMetric: (b.chartMetric ?? undefined) as never, mandatory: b.mandatory,
-    }, { activeFrom: today > plant.misStart ? today : undefined }, ctx.userId);
+    }, { activeFrom: today > plant.misStart ? today : undefined, monitoringTab: b.monitoringTab, resultDisplay: b.resultDisplay }, ctx.userId);
     if (b.standard) await upsertStandard(tx, ctx.tenantId, newId, plant.misStart, b.standard, null, ctx.userId);
     await changed(tx, ctx, plant, meta, { action: 'parameter.create', entity: 'parameter', entityId: newId, after: b }, null);
     return newId;
@@ -250,7 +271,10 @@ export async function patchParameter(ctx: Ctx, plant: PlantCtx, id: string, b: R
       direction: b.direction, event_rule: b.eventRule, result_noun: b.resultNoun, logsheet_block: b.logsheetBlock,
       logsheet_order: b.logsheetOrder, mis_section: b.misSection, mis_order: b.misOrder, dashboard_card: b.dashboardCard,
       dashboard_order: b.dashboardOrder, chart_type: b.chartType, chart_metric: b.chartMetric, mandatory: b.mandatory,
+      monitoring_tab: b.monitoringTab, result_display: b.resultDisplay,
     }, 4);
+    // v1.1: purely presentational, but the PDF should still regenerate to reflect the new tab/display.
+    if (b.monitoringTab !== undefined || b.resultDisplay !== undefined) recalc = recalc ?? plant.misStart;
     if (set.values.length === 0) return;
     await exec(tx, `UPDATE app.parameters SET ${set.sql} WHERE tenant_id = $1 AND plant_id = $2 AND id = $3`,
       [ctx.tenantId, plant.id, id, ...set.values]);
@@ -282,14 +306,20 @@ export async function deactivateParameter(ctx: Ctx, plant: PlantCtx, id: string,
 }
 
 export async function addStandard(ctx: Ctx, plant: PlantCtx, id: string, b: {
-  std?: number | null; monthly?: number | null; min?: number | null; max?: number | null; effectiveFrom?: string; reason?: string;
+  kind?: StandardKind; std?: number | null; monthly?: number | null; min?: number | null; max?: number | null;
+  inheritFromKind?: StandardKind | null; effectiveFrom?: string; reason?: string;
 }, meta: RequestMeta) {
   const { from, reason } = effectiveDate(plant, b);
   if (b.min != null && b.max != null && b.min > b.max) throw badRequest('INVALID_RANGE', 'Minimum must not exceed maximum.');
+  const kind = b.kind ?? 'actual';
+  if (b.inheritFromKind && b.inheritFromKind === kind) {
+    throw badRequest('INVALID_INHERIT', 'A standard cannot inherit from its own kind.');
+  }
   await withTenant(T(ctx), async (tx) => {
     await loadParam(tx, ctx, plant, id);
-    await upsertStandard(tx, ctx.tenantId, id, from, b, reason, ctx.userId);
-    await changed(tx, ctx, plant, meta, { action: 'parameter.standard_set', entity: 'parameter', entityId: id, after: { ...b, from }, reason }, from);
+    await upsertStandard(tx, ctx.tenantId, id, from, { ...b, kind }, reason, ctx.userId);
+    // Changing the Actual kind (the usual MIS standard) always recalculates; Bidding only affects revenue/variance display.
+    await changed(tx, ctx, plant, meta, { action: 'parameter.standard_set', entity: 'parameter', entityId: id, after: { ...b, kind, from }, reason }, from);
   });
   await afterCommit(ctx, plant, from);
   return getParameter(ctx, plant, id);
@@ -481,14 +511,16 @@ export async function listContractYears(ctx: Ctx, plant: PlantCtx) {
     const years = await many<{ id: string; year_no: number; start_date: string; end_date: string; days: number; fixed_fee: string; fee_configured: boolean }>(tx,
       `SELECT id, year_no, start_date, end_date, days, fixed_fee, fee_configured FROM app.contract_years
         WHERE tenant_id = $1 AND plant_id = $2 ORDER BY year_no`, [ctx.tenantId, plant.id]);
-    const comps = await many<{ id: string; contract_year_id: string; name: string; code: string; rate: string; std_qty_per_day: string }>(tx,
-      `SELECT c.id, c.contract_year_id, c.name, p.code, c.rate, c.std_qty_per_day FROM app.revenue_components c
+    const comps = await many<{ id: string; contract_year_id: string; name: string; code: string; rate: string;
+      std_qty_per_day: string; actual_std_qty_per_day: string | null }>(tx,
+      `SELECT c.id, c.contract_year_id, c.name, p.code, c.rate, c.std_qty_per_day, c.actual_std_qty_per_day FROM app.revenue_components c
          JOIN app.parameters p ON p.tenant_id = c.tenant_id AND p.id = c.parameter_id
         WHERE c.tenant_id = $1 AND p.plant_id = $2 ORDER BY c.name`, [ctx.tenantId, plant.id]);
     let totalValue = D(0);
     const out = years.map((y) => {
       const components = comps.filter((c) => c.contract_year_id === y.id).map((c) => ({
         id: c.id, name: c.name, parameterCode: c.code, rate: Number(c.rate), stdQtyPerDay: Number(c.std_qty_per_day),
+        actualStdQtyPerDay: c.actual_std_qty_per_day === null ? null : Number(c.actual_std_qty_per_day),
       }));
       const varPerDay = components.reduce((s, c) => s.plus(D(c.rate).mul(c.stdQtyPerDay)), D(0));
       const fpPerDay = D(y.fixed_fee).div(y.days);
@@ -535,21 +567,23 @@ async function paramIdByCode(tx: Tx, ctx: Ctx, plant: PlantCtx, code: string): P
   return p.id;
 }
 export async function addComponent(ctx: Ctx, plant: PlantCtx, yearNo: number,
-  b: { name: string; parameterCode: string; rate: number; stdQtyPerDay: number }, meta: RequestMeta) {
+  b: { name: string; parameterCode: string; rate: number; stdQtyPerDay: number; actualStdQtyPerDay?: number | null }, meta: RequestMeta) {
   let from = '';
   await withTenant(T(ctx), async (tx) => {
     const y = await loadYear(tx, ctx, plant, yearNo);
     from = y.start_date;
     const pid = await paramIdByCode(tx, ctx, plant, b.parameterCode);
-    const r = await one<{ id: string }>(tx, `INSERT INTO app.revenue_components (tenant_id, contract_year_id, name, parameter_id, rate, std_qty_per_day, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [ctx.tenantId, y.id, b.name, pid, b.rate, b.stdQtyPerDay, ctx.userId]);
+    const r = await one<{ id: string }>(tx,
+      `INSERT INTO app.revenue_components (tenant_id, contract_year_id, name, parameter_id, rate, std_qty_per_day, actual_std_qty_per_day, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [ctx.tenantId, y.id, b.name, pid, b.rate, b.stdQtyPerDay, b.actualStdQtyPerDay ?? null, ctx.userId]);
     await changed(tx, ctx, plant, meta, { action: 'revenue_component.create', entity: 'revenue_component', entityId: r.id, after: b }, from);
   });
   await afterCommit(ctx, plant, from);
   return listContractYears(ctx, plant);
 }
 export async function patchComponent(ctx: Ctx, plant: PlantCtx, yearNo: number, id: string,
-  b: { name?: string; rate?: number; stdQtyPerDay?: number } | null, meta: RequestMeta) {
+  b: { name?: string; rate?: number; stdQtyPerDay?: number; actualStdQtyPerDay?: number | null } | null, meta: RequestMeta) {
   let from = '';
   await withTenant(T(ctx), async (tx) => {
     const y = await loadYear(tx, ctx, plant, yearNo);
@@ -560,7 +594,7 @@ export async function patchComponent(ctx: Ctx, plant: PlantCtx, yearNo: number, 
     if (b === null) {
       await exec(tx, 'DELETE FROM app.revenue_components WHERE tenant_id = $1 AND id = $2', [ctx.tenantId, id]);
     } else {
-      const set = setClause({ name: b.name, rate: b.rate, std_qty_per_day: b.stdQtyPerDay }, 3);
+      const set = setClause({ name: b.name, rate: b.rate, std_qty_per_day: b.stdQtyPerDay, actual_std_qty_per_day: b.actualStdQtyPerDay }, 3);
       if (set.values.length) await exec(tx, `UPDATE app.revenue_components SET ${set.sql} WHERE tenant_id = $1 AND id = $2`, [ctx.tenantId, id, ...set.values]);
     }
     await changed(tx, ctx, plant, meta, { action: b === null ? 'revenue_component.delete' : 'revenue_component.update',
@@ -822,7 +856,7 @@ export async function copyFrom(ctx: Ctx, plant: PlantCtx, sourcePlantId: string,
         misSection: (p.mis_section ?? undefined) as never, misOrder: p.mis_order ?? undefined, dashboardCard: p.dashboard_card,
         dashboardOrder: p.dashboard_order ?? undefined, chartType: p.chart_type as never,
         chartMetric: (p.chart_metric ?? undefined) as never, mandatory: p.mandatory,
-      }, { linkRole: p.link_role ?? undefined }, ctx.userId);
+      }, { linkRole: p.link_role ?? undefined, monitoringTab: p.monitoring_tab as never, resultDisplay: p.result_display as never }, ctx.userId);
       const st = await maybeOne<{ std_value: string | null; monthly_allowance: string | null; limit_min: string | null; limit_max: string | null }>(tx,
         `SELECT std_value, monthly_allowance, limit_min, limit_max FROM app.parameter_standards WHERE tenant_id = $1 AND parameter_id = $2
           ORDER BY effective_from DESC LIMIT 1`, [ctx.tenantId, p.id]);
