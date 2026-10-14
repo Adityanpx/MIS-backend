@@ -8,3 +8,5 @@ export const DEFAULT_GST_RATE_PCT = 18;
 export const DEFAULT_MAX_USERS_PER_PLANT = 10;
 export const DEFAULT_STORAGE_GB_PER_PLANT = 5;
 export const PAGE_SIZE_MAX = 100;
+/** v1.1: tenant-wide cap on Management (read-only, company-wide) users when no plan says otherwise. */
+export const DEFAULT_MAX_MANAGEMENT_USERS = 5;

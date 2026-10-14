@@ -48,3 +48,42 @@ export const SETTINGS_GROUPS = [
 ] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 export const DOCUMENT_TYPES = ['agreement', 'purchase_order', 'work_order', 'other'] as const;
+
+// v1.1 (standards, monitoring tabs, management role, maintenance)
+export const STANDARD_KINDS = ['bidding', 'actual'] as const;
+export type StandardKind = (typeof STANDARD_KINDS)[number];
+
+export const STANDARDS_SHOWN = ['bidding', 'actual', 'both'] as const;
+export type StandardsShown = (typeof STANDARDS_SHOWN)[number];
+
+export const RESULT_MODES = ['pct', 'qty', 'both'] as const;
+export type ResultMode = (typeof RESULT_MODES)[number];
+
+export const RESULT_DISPLAY_OVERRIDES = ['pct', 'qty', 'both', 'none'] as const;
+export type ResultDisplayOverride = (typeof RESULT_DISPLAY_OVERRIDES)[number];
+
+export const MONITORING_TABS = ['key', 'chemicals', 'compliance', 'administrative', 'maintenance'] as const;
+export type MonitoringTab = (typeof MONITORING_TABS)[number];
+
+export const BREAKDOWN_STATUSES = ['open', 'in_progress', 'awaiting_spares', 'restored', 'cancelled'] as const;
+export type BreakdownStatus = (typeof BREAKDOWN_STATUSES)[number];
+
+export const BREAKDOWN_UPDATE_KINDS = [
+  'created', 'status', 'note', 'restored', 'reopened', 'cancelled', 'corrected',
+] as const;
+export type BreakdownUpdateKind = (typeof BREAKDOWN_UPDATE_KINDS)[number];
+
+export const CRITICALITIES = ['critical', 'major', 'minor'] as const;
+export type Criticality = (typeof CRITICALITIES)[number];
+
+export const STANDBY_STATES = ['yes', 'no', 'none'] as const;
+export type StandbyState = (typeof STANDBY_STATES)[number];
+
+export const IMPACTS = ['none', 'reduced_capacity', 'bypass', 'plant_stopped'] as const;
+export type Impact = (typeof IMPACTS)[number];
+
+export const CAUSE_CATEGORIES = [
+  'mechanical', 'electrical', 'instrumentation', 'process',
+  'power_failure', 'operator_error', 'wear_and_tear', 'other',
+] as const;
+export type CauseCategory = (typeof CAUSE_CATEGORIES)[number];

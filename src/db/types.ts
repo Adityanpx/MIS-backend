@@ -19,8 +19,8 @@ export interface SuperAdminRow {
 }
 export interface PlanRow {
   id: string; name: string; code: string; description: string | null; term_years: number; price_per_year: string;
-  escalation_pct: string; upfront_discount_pct: string; max_users_per_plant: number; storage_gb: number;
-  features: Record<string, boolean>; status: 'active' | 'archived'; created_at: string;
+  escalation_pct: string; upfront_discount_pct: string; max_users_per_plant: number; max_management_users: number;
+  storage_gb: number; features: Record<string, boolean>; status: 'active' | 'archived'; created_at: string;
 }
 export interface PlantRow {
   id: string; tenant_id: string; code: string; name: string; type: string; capacity_mld: string; city: string | null;
@@ -39,7 +39,8 @@ export interface SubscriptionRow {
 }
 export interface PlanSnapshot {
   planId: string; name: string; code: string; termYears: number; pricePerYear: string; escalationPct: string;
-  upfrontDiscountPct: string; maxUsersPerPlant: number; storageGb: number; features: Record<string, boolean>;
+  upfrontDiscountPct: string; maxUsersPerPlant: number; maxManagementUsers: number; storageGb: number;
+  features: Record<string, boolean>;
 }
 export interface BillingScheduleRow {
   id: string; tenant_id: string; subscription_id: string; year_no: number; period_from: string; period_to: string;
