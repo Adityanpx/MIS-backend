@@ -11,13 +11,13 @@ import { currentTermsVersion } from '../platform/settings.service';
 import { insertRefreshToken } from './auth.repo';
 
 export interface PlantAccessDto {
-  plantId: string; code: string; name: string; role: PlantRole | 'client_admin';
+  plantId: string; code: string; name: string; role: PlantRole | 'client_admin' | 'management';
   setupStatus: string; accountState: string;
 }
 export interface SessionProfile {
   user: {
     id: string; name: string; email: string; mobile: string | null; designation: string | null;
-    isClientAdmin: boolean; totpEnabled: boolean;
+    isClientAdmin: boolean; isManagement: boolean; totpEnabled: boolean;
   };
   tenant: { id: string; code: string; displayName: string; accountState: string; force2fa: boolean; logoUrl: string | null };
   plants: PlantAccessDto[];
@@ -42,11 +42,11 @@ export async function loadProfile(
 ): Promise<SessionProfile> {
   const u = await one<{
     id: string; name: string; email: string; mobile: string | null; designation: string | null;
-    is_client_admin: boolean; totp_enabled: boolean; code: string; display_name: string;
+    is_client_admin: boolean; is_management: boolean; totp_enabled: boolean; code: string; display_name: string;
     account_state: string; force_2fa: boolean; logo_key: string | null; terms_version: string | null;
   }>(
     tx,
-    `SELECT u.id, u.name, u.email, u.mobile, u.designation, u.is_client_admin, u.totp_enabled,
+    `SELECT u.id, u.name, u.email, u.mobile, u.designation, u.is_client_admin, u.is_management, u.totp_enabled,
             c.code, c.display_name, c.account_state, c.force_2fa, c.logo_key, c.terms_version
        FROM app.users u JOIN app.clients c ON c.id = u.tenant_id
       WHERE u.tenant_id = $1 AND u.id = $2`,
@@ -57,6 +57,13 @@ export async function loadProfile(
         tx,
         `SELECT p.id, p.code, p.name, p.setup_status, p.account_state, 'client_admin' AS role
            FROM app.plants p WHERE p.tenant_id = $1 ORDER BY p.name`,
+        [tenantId],
+      )
+    : u.is_management
+    ? await many<{ id: string; code: string; name: string; setup_status: string; account_state: string; role: string }>(
+        tx,
+        `SELECT p.id, p.code, p.name, p.setup_status, p.account_state, 'management' AS role
+           FROM app.plants p WHERE p.tenant_id = $1 AND p.setup_status <> 'closed' ORDER BY p.name`,
         [tenantId],
       )
     : await many<{ id: string; code: string; name: string; setup_status: string; account_state: string; role: string }>(
@@ -71,7 +78,7 @@ export async function loadProfile(
   return {
     user: {
       id: u.id, name: u.name, email: u.email, mobile: u.mobile, designation: u.designation,
-      isClientAdmin: u.is_client_admin, totpEnabled: u.totp_enabled,
+      isClientAdmin: u.is_client_admin, isManagement: u.is_management, totpEnabled: u.totp_enabled,
     },
     tenant: {
       id: tenantId, code: u.code, displayName: u.display_name, accountState: u.account_state,

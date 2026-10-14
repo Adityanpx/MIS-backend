@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { auditActAs } from '../middleware/act-as-audit';
 import { authClient } from '../middleware/auth-client';
+import { refuseManagementWrites } from '../middleware/management';
 import { userLimiter } from '../middleware/rate-limit';
-import { requireTermsAccepted } from '../middleware/require-role';
+import { requireClientAdminOrManagement, requireTermsAccepted } from '../middleware/require-role';
 import { authProtectedRouter, authRouter } from '../modules/auth/auth.routes';
 import { meRouter } from '../modules/auth/me.routes';
 import { clientBillingRouter } from '../modules/client-billing/client-billing.routes';
@@ -14,7 +15,7 @@ import { notificationsRouter } from '../modules/notifications/notifications.rout
 import { announcementsClientRouter } from '../modules/platform/announcements.routes';
 import { publicRouter } from '../modules/platform/public.routes';
 import { plantsRouter } from '../modules/plants/plants.routes';
-import { overviewRouter } from '../modules/insights/insights.routes';
+import { overviewRouter, portfolioRouter } from '../modules/insights/insights.routes';
 
 export const clientApiRouter = Router();
 clientApiRouter.use('/auth', authRouter);          // public auth endpoints (login, refresh, act-as exchange …)
@@ -23,9 +24,11 @@ clientApiRouter.use('/files', filesLocalRouter);
 clientApiRouter.use(authClient);                   // ── access token required below ──
 clientApiRouter.use(userLimiter);                  // SEC-06: 300 requests/min per user
 clientApiRouter.use(auditActAs);                   // ACT-04
-clientApiRouter.use('/auth', authProtectedRouter);
+clientApiRouter.use('/auth', authProtectedRouter); // self-service (change password, 2FA, logout) — allowed for Management too
 clientApiRouter.use('/me', meRouter);
 clientApiRouter.use(requireTermsAccepted);         // ── accepted Terms required below ──
+clientApiRouter.use(refuseManagementWrites);       // ── GR-17: Management users are read-only below ──
+clientApiRouter.use('/company/portfolio', requireClientAdminOrManagement, portfolioRouter); // registered before /company (Client Admin only)
 clientApiRouter.use('/company', companyRouter);
 clientApiRouter.use('/plants', plantsRouter);
 clientApiRouter.use('/overview', overviewRouter);

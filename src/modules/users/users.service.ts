@@ -6,7 +6,7 @@ import type { PlantRole } from '../../shared/enums';
 import { diff, writeAudit, type AuditActor } from '../audit/audit.service';
 import { revokeAllRefreshTokens } from '../auth/auth.repo';
 import { createUserToken, queueClientInviteEmail, queueClientResetEmail } from '../auth/user-tokens';
-import { assertPlantUserLimits } from '../domain/plan-limits';
+import { assertManagementUserLimits, assertPlantUserLimits } from '../domain/plan-limits';
 
 export interface PlantRoleInput {
   plantId: string;
@@ -14,17 +14,17 @@ export interface PlantRoleInput {
 }
 export interface UserDto {
   id: string; name: string; email: string; mobile: string | null; designation: string | null;
-  isClientAdmin: boolean; status: string; totpEnabled: boolean; lastLoginAt: string | null; createdAt: string;
+  isClientAdmin: boolean; isManagement: boolean; status: string; totpEnabled: boolean; lastLoginAt: string | null; createdAt: string;
   plantRoles: Array<{ plantId: string; plantName: string; role: PlantRole }>;
 }
 interface UserRowWithRoles {
   id: string; name: string; email: string; mobile: string | null; designation: string | null;
-  is_client_admin: boolean; status: string; totp_enabled: boolean; last_login_at: string | null; created_at: string;
+  is_client_admin: boolean; is_management: boolean; status: string; totp_enabled: boolean; last_login_at: string | null; created_at: string;
   plant_roles: Array<{ plantId: string; plantName: string; role: PlantRole }>;
 }
 
 const USER_SELECT = `
-  SELECT u.id, u.name, u.email, u.mobile, u.designation, u.is_client_admin, u.status, u.totp_enabled,
+  SELECT u.id, u.name, u.email, u.mobile, u.designation, u.is_client_admin, u.is_management, u.status, u.totp_enabled,
          u.last_login_at, u.created_at,
          coalesce((SELECT json_agg(json_build_object('plantId', r.plant_id, 'plantName', p.name, 'role', r.role) ORDER BY p.name)
                      FROM app.user_plant_roles r
@@ -34,7 +34,7 @@ const USER_SELECT = `
 
 const toDto = (r: UserRowWithRoles): UserDto => ({
   id: r.id, name: r.name, email: r.email, mobile: r.mobile, designation: r.designation,
-  isClientAdmin: r.is_client_admin, status: r.status, totpEnabled: r.totp_enabled,
+  isClientAdmin: r.is_client_admin, isManagement: r.is_management, status: r.status, totpEnabled: r.totp_enabled,
   lastLoginAt: r.last_login_at, createdAt: r.created_at, plantRoles: r.plant_roles,
 });
 
@@ -89,10 +89,10 @@ async function assertAnotherActiveAdmin(tx: Tx, tenantId: string, userId: string
 async function lockUser(tx: Tx, tenantId: string, userId: string) {
   const u = await maybeOne<{
     id: string; name: string; email: string; mobile: string | null; designation: string | null;
-    is_client_admin: boolean; status: string; password_hash: string | null;
+    is_client_admin: boolean; is_management: boolean; status: string; password_hash: string | null;
   }>(
     tx,
-    `SELECT id, name, email, mobile, designation, is_client_admin, status, password_hash
+    `SELECT id, name, email, mobile, designation, is_client_admin, is_management, status, password_hash
        FROM app.users WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
     [tenantId, userId],
   );
@@ -105,7 +105,8 @@ const plantIdsOf = async (tx: Tx, tenantId: string, userId: string) =>
   )).map((r) => r.plant_id);
 
 export interface InviteInput {
-  name: string; email: string; mobile?: string; designation?: string; isClientAdmin: boolean; plantRoles: PlantRoleInput[];
+  name: string; email: string; mobile?: string; designation?: string; isClientAdmin: boolean; isManagement?: boolean;
+  plantRoles: PlantRoleInput[];
 }
 
 /** CA-05: create an invited user (+ plant roles) and queue the invitation email. Catch EMAIL_IN_USE outside the tx. */
@@ -116,15 +117,17 @@ export async function inviteUser(
   actor: AuditActor,
   meta: RequestMeta,
 ): Promise<{ user: UserDto; outboxId: string | null }> {
-  const roles = input.isClientAdmin ? [] : input.plantRoles;
+  const isManagement = !!input.isManagement;
+  const roles = input.isClientAdmin || isManagement ? [] : input.plantRoles;
   assertNoDuplicatePlants(roles);
   await assertPlantsInTenant(tx, tenantId, roles.map((r) => r.plantId));
   await assertPlantUserLimits(tx, tenantId, null, roles.map((r) => r.plantId));
+  if (isManagement) await assertManagementUserLimits(tx, tenantId, null);
   const { id } = await one<{ id: string }>(
     tx,
-    `INSERT INTO app.users (tenant_id, name, email, mobile, designation, is_client_admin, status, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, 'invited', $7) RETURNING id`,
-    [tenantId, input.name, input.email, input.mobile ?? null, input.designation ?? null, input.isClientAdmin, actor.actorId],
+    `INSERT INTO app.users (tenant_id, name, email, mobile, designation, is_client_admin, is_management, status, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'invited', $8) RETURNING id`,
+    [tenantId, input.name, input.email, input.mobile ?? null, input.designation ?? null, input.isClientAdmin, isManagement, actor.actorId],
   );
   for (const r of roles) {
     await exec(
@@ -145,26 +148,42 @@ export async function updateUser(
   tx: Tx,
   tenantId: string,
   userId: string,
-  patch: { name?: string; mobile?: string | null; designation?: string | null; isClientAdmin?: boolean },
+  patch: { name?: string; mobile?: string | null; designation?: string | null; isClientAdmin?: boolean; isManagement?: boolean },
   actor: AuditActor,
   meta: RequestMeta,
 ): Promise<UserDto> {
   const before = await lockUser(tx, tenantId, userId);
+  const willBeManagement = patch.isManagement ?? before.is_management;
+  const willBeClientAdmin = patch.isClientAdmin ?? before.is_client_admin;
+  if (willBeClientAdmin && willBeManagement) {
+    throw unprocessable('CLIENT_ADMIN_HAS_ALL_PLANTS', 'A Client Admin cannot also be a Management user.');
+  }
   if (patch.isClientAdmin === false && before.is_client_admin) {
     await assertAnotherActiveAdmin(tx, tenantId, userId);
     // From now on the user counts against each plant's user limit again.
     if (before.status !== 'disabled') await assertPlantUserLimits(tx, tenantId, userId, await plantIdsOf(tx, tenantId, userId));
   }
+  if (patch.isManagement === true && !before.is_management) {
+    if (before.status !== 'disabled') await assertManagementUserLimits(tx, tenantId, userId);
+    // A Management user is company-wide read-only: it never keeps per-plant roles.
+    await exec(tx, 'DELETE FROM app.user_plant_roles WHERE tenant_id = $1 AND user_id = $2', [tenantId, userId]);
+  }
   const set = setClause(
-    { name: patch.name, mobile: patch.mobile, designation: patch.designation, is_client_admin: patch.isClientAdmin }, 3);
+    {
+      name: patch.name, mobile: patch.mobile, designation: patch.designation,
+      is_client_admin: patch.isClientAdmin, is_management: patch.isManagement,
+    }, 3);
   if (set.values.length > 0) {
     const after = await one<Record<string, unknown>>(
       tx,
       `UPDATE app.users SET ${set.sql} WHERE tenant_id = $1 AND id = $2
-       RETURNING name, mobile, designation, is_client_admin`,
+       RETURNING name, mobile, designation, is_client_admin, is_management`,
       [tenantId, userId, ...set.values],
     );
-    const b = { name: before.name, mobile: before.mobile, designation: before.designation, is_client_admin: before.is_client_admin };
+    const b = {
+      name: before.name, mobile: before.mobile, designation: before.designation,
+      is_client_admin: before.is_client_admin, is_management: before.is_management,
+    };
     await writeAudit(tx, actor, { action: 'user.update', entity: 'user', entityId: userId, ...diff(b, after) }, meta);
   }
   return getUser(tx, tenantId, userId);
@@ -192,7 +211,8 @@ export async function setUserStatus(
     await revokeAllRefreshTokens(tx, tenantId, userId);
   } else {
     if (u.status !== 'disabled') return getUser(tx, tenantId, userId);
-    if (!u.is_client_admin) await assertPlantUserLimits(tx, tenantId, userId, await plantIdsOf(tx, tenantId, userId));
+    if (u.is_management) await assertManagementUserLimits(tx, tenantId, userId);
+    else if (!u.is_client_admin) await assertPlantUserLimits(tx, tenantId, userId, await plantIdsOf(tx, tenantId, userId));
     await exec(tx, 'UPDATE app.users SET status = $3 WHERE tenant_id = $1 AND id = $2', [
       tenantId, userId, u.password_hash ? 'active' : 'invited',
     ]);
@@ -236,6 +256,9 @@ export async function setPlantRoles(
   const u = await lockUser(tx, tenantId, userId);
   if (u.is_client_admin) {
     throw unprocessable('CLIENT_ADMIN_HAS_ALL_PLANTS', 'A Client Admin already has access to every plant.');
+  }
+  if (u.is_management) {
+    throw unprocessable('MANAGEMENT_HAS_NO_PLANT_ROLES', 'A Management user does not take per-plant roles.');
   }
   assertNoDuplicatePlants(roles);
   await assertPlantsInTenant(tx, tenantId, roles.map((r) => r.plantId));

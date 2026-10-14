@@ -4,6 +4,7 @@ export interface ClientCtx {
   tenantId: string;
   userId: string;
   isClientAdmin: boolean;
+  isManagement: boolean;
   plantRoles: Record<string, PlantRole>;
   tenantAccountState: string;
   tenantTermsVersion: string | null;
@@ -21,7 +22,7 @@ export interface PlantCtx {
   omStart: string;
   omEnd: string;
   misStart: string;
-  myRole: PlantRole | 'client_admin';
+  myRole: PlantRole | 'client_admin' | 'management';
 }
 
 declare global {

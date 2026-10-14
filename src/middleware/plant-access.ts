@@ -13,7 +13,7 @@ export function plantAccess(allowed: PlantRole[] | 'any'): RequestHandler {
     if (!ctx) throw unauthorized();
     const plantId = req.params.plantId ?? '';
     if (!UUID_RE.test(plantId)) throw notFound('Plant');
-    const role = ctx.isClientAdmin ? 'client_admin' : ctx.plantRoles[plantId];
+    const role = ctx.isClientAdmin ? 'client_admin' : ctx.isManagement ? 'management' : ctx.plantRoles[plantId];
     if (!role) throw notFound('Plant');
     const plant = await withTenant({ tenantId: ctx.tenantId, actorId: ctx.userId }, (tx) =>
       maybeOne<{ id: string; name: string; setup_status: string; account_state: string; om_start: string; om_end: string; mis_start: string }>(
@@ -24,8 +24,12 @@ export function plantAccess(allowed: PlantRole[] | 'any'): RequestHandler {
       ),
     );
     if (!plant) throw notFound('Plant');
-    if (role !== 'client_admin' && allowed !== 'any' && !allowed.includes(role)) {
+    // Management is company-wide read-only (GR-17): it never satisfies a write-role requirement.
+    if (role !== 'client_admin' && role !== 'management' && allowed !== 'any' && !allowed.includes(role)) {
       throw forbidden('FORBIDDEN_ROLE', 'Your role on this plant does not allow this action.');
+    }
+    if (role === 'management' && allowed !== 'any') {
+      throw forbidden('FORBIDDEN_ROLE', 'Management users are read-only.');
     }
     req.plant = {
       id: plant.id, name: plant.name, setupStatus: plant.setup_status, accountState: plant.account_state,

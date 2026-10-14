@@ -11,24 +11,24 @@ import { getSetting } from '../../platform/settings.service';
 
 export interface PlanDto {
   id: string; name: string; code: string; description: string | null; termYears: number; pricePerYear: string;
-  escalationPct: number; upfrontDiscountPct: number; maxUsersPerPlant: number; storageGb: number;
+  escalationPct: number; upfrontDiscountPct: number; maxUsersPerPlant: number; maxManagementUsers: number; storageGb: number;
   features: Record<string, boolean>; status: string; subscriptionsCount: number; createdAt: string;
 }
 export interface PlanRowFull {
   id: string; name: string; code: string; description: string | null; term_years: number; price_per_year: string;
-  escalation_pct: string; upfront_discount_pct: string; max_users_per_plant: number; storage_gb: number;
-  features: Record<string, boolean>; status: string; created_at: string; subscriptions_count: number;
+  escalation_pct: string; upfront_discount_pct: string; max_users_per_plant: number; max_management_users: number;
+  storage_gb: number; features: Record<string, boolean>; status: string; created_at: string; subscriptions_count: number;
 }
 const SELECT = `
   SELECT p.id, p.name, p.code, p.description, p.term_years, p.price_per_year, p.escalation_pct, p.upfront_discount_pct,
-         p.max_users_per_plant, p.storage_gb, p.features, p.status, p.created_at,
+         p.max_users_per_plant, p.max_management_users, p.storage_gb, p.features, p.status, p.created_at,
          (SELECT count(*) FROM app.subscriptions s WHERE s.plan_id = p.id) AS subscriptions_count
     FROM app.plans p`;
 export const toPlanDto = (r: PlanRowFull): PlanDto => ({
   id: r.id, name: r.name, code: r.code, description: r.description, termYears: r.term_years,
   pricePerYear: r.price_per_year, escalationPct: Number(r.escalation_pct), upfrontDiscountPct: Number(r.upfront_discount_pct),
-  maxUsersPerPlant: r.max_users_per_plant, storageGb: r.storage_gb, features: r.features, status: r.status,
-  subscriptionsCount: r.subscriptions_count, createdAt: r.created_at,
+  maxUsersPerPlant: r.max_users_per_plant, maxManagementUsers: r.max_management_users, storageGb: r.storage_gb,
+  features: r.features, status: r.status, subscriptionsCount: r.subscriptions_count, createdAt: r.created_at,
 });
 
 export async function gstRatePct(): Promise<number> {
@@ -59,7 +59,8 @@ export async function getPlan(ctx: AdminTxCtx, id: string): Promise<PlanDto> {
 
 export interface PlanInput {
   name: string; code: string; description?: string; termYears: number; pricePerYear: string; escalationPct: number;
-  upfrontDiscountPct: number; maxUsersPerPlant: number; storageGb: number; features: Record<string, boolean>;
+  upfrontDiscountPct: number; maxUsersPerPlant: number; maxManagementUsers: number; storageGb: number;
+  features: Record<string, boolean>;
 }
 export async function createPlan(ctx: AdminTxCtx, input: PlanInput, meta: RequestMeta): Promise<PlanDto> {
   await assertTermAllowed(input.termYears);
@@ -68,10 +69,11 @@ export async function createPlan(ctx: AdminTxCtx, input: PlanInput, meta: Reques
       const { id } = await one<{ id: string }>(
         tx,
         `INSERT INTO app.plans (name, code, description, term_years, price_per_year, escalation_pct, upfront_discount_pct,
-                                max_users_per_plant, storage_gb, features, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11) RETURNING id`,
+                                max_users_per_plant, max_management_users, storage_gb, features, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12) RETURNING id`,
         [input.name, input.code, input.description ?? null, input.termYears, input.pricePerYear, input.escalationPct,
-          input.upfrontDiscountPct, input.maxUsersPerPlant, input.storageGb, JSON.stringify(input.features), ctx.adminId],
+          input.upfrontDiscountPct, input.maxUsersPerPlant, input.maxManagementUsers, input.storageGb,
+          JSON.stringify(input.features), ctx.adminId],
       );
       const dto = toPlanDto(await loadPlan(tx, id));
       await writeAudit(tx, adminActor(ctx.adminId), { action: 'plan.create', entity: 'plan', entityId: id, after: dto }, meta);
@@ -93,7 +95,7 @@ export async function updatePlan(
     const set = setClause({
       name: patch.name, description: patch.description, term_years: patch.termYears, price_per_year: patch.pricePerYear,
       escalation_pct: patch.escalationPct, upfront_discount_pct: patch.upfrontDiscountPct,
-      max_users_per_plant: patch.maxUsersPerPlant, storage_gb: patch.storageGb,
+      max_users_per_plant: patch.maxUsersPerPlant, max_management_users: patch.maxManagementUsers, storage_gb: patch.storageGb,
       features: patch.features === undefined ? undefined : JSON.stringify(patch.features),
     }, 2);
     if (set.values.length === 0) return before;

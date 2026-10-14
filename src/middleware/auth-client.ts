@@ -32,11 +32,11 @@ export const authClient: RequestHandler = asyncHandler(async (req, _res, next) =
   } else {
     ctx = await withTenant({ tenantId: claims.tid, actorId: claims.sub }, async (tx) => {
       const u = await maybeOne<{
-        status: string; token_version: number; is_client_admin: boolean;
+        status: string; token_version: number; is_client_admin: boolean; is_management: boolean;
         client_status: string; account_state: string; terms_version: string | null;
       }>(
         tx,
-        `SELECT u.status, u.token_version, u.is_client_admin,
+        `SELECT u.status, u.token_version, u.is_client_admin, u.is_management,
                 c.status AS client_status, c.account_state, c.terms_version
            FROM app.users u JOIN app.clients c ON c.id = u.tenant_id
           WHERE u.tenant_id = $1 AND u.id = $2`,
@@ -64,6 +64,7 @@ export const authClient: RequestHandler = asyncHandler(async (req, _res, next) =
         tenantId: claims.tid,
         userId: claims.sub,
         isClientAdmin: u.is_client_admin,
+        isManagement: u.is_management,
         plantRoles: Object.fromEntries(roles.map((r) => [r.plant_id, r.role])),
         tenantAccountState: u.account_state,
         tenantTermsVersion: u.terms_version,

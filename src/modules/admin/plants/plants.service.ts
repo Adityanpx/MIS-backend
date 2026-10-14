@@ -100,7 +100,8 @@ async function prepare(tx: Tx, input: PlantCreateInput) {
   const snapshot: PlanSnapshot = {
     planId: plan.id, name: plan.name, code: plan.code, termYears: plan.term_years, pricePerYear: plan.price_per_year,
     escalationPct: plan.escalation_pct, upfrontDiscountPct: plan.upfront_discount_pct,
-    maxUsersPerPlant: plan.max_users_per_plant, storageGb: plan.storage_gb, features: plan.features,
+    maxUsersPerPlant: plan.max_users_per_plant, maxManagementUsers: plan.max_management_users,
+    storageGb: plan.storage_gb, features: plan.features,
   };
   return {
     client, plan, snapshot, omEnd, misStart, contractYears, startDate, endDate, pricePerYear, schedule, warnings,

@@ -21,7 +21,7 @@ import { getSubscription } from './subscriptions.service';
 const snapshotOf = (plan: PlanRowFull): PlanSnapshot => ({
   planId: plan.id, name: plan.name, code: plan.code, termYears: plan.term_years, pricePerYear: plan.price_per_year,
   escalationPct: plan.escalation_pct, upfrontDiscountPct: plan.upfront_discount_pct, maxUsersPerPlant: plan.max_users_per_plant,
-  storageGb: plan.storage_gb, features: plan.features,
+  maxManagementUsers: plan.max_management_users, storageGb: plan.storage_gb, features: plan.features,
 });
 
 /** INV-02 dates for a billing period that starts on `from`. */
