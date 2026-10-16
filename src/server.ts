@@ -6,10 +6,23 @@ import { logger } from './lib/logger';
 import { startJobs, stopJobs } from './jobs/boss';
 import { drainEmails } from './modules/notifications/email.service';
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function withRetry(label: string, fn: () => Promise<void>, tries = 6, delayMs = 3000) {
+  for (let i = 1; ; i++) {
+    try { return await fn(); }
+    catch (err) {
+      if (i >= tries) throw err;
+      logger.warn({ err, label, attempt: i }, `${label} failed — retrying in ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   initSentry();
-  await pingDb();
-  await startJobs();
+  await withRetry('pingDb', pingDb);
+  await withRetry('startJobs', startJobs);
   const app = createApp();
   const server = app.listen(env.PORT, () => logger.info({ port: env.PORT }, 'OMMIS API listening'));
   const shutdown = (signal: string) => {
