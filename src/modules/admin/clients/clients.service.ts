@@ -9,8 +9,8 @@ import { stateName } from '../../../shared/indian-states';
 import { adminActor, diff, writeAudit } from '../../audit/audit.service';
 import { signedUrlOrNull, storage, tenantKey } from '../../files/storage';
 import type { AllowedKind } from '../../files/upload';
-import { sendInBackground } from '../../notifications/email.service';
-import { inviteUser } from '../../users/users.service';
+import { assertPasswordPolicy, hashPassword } from '../../../lib/password';
+import { createActiveClientAdmin } from '../../users/users.service';
 
 interface ClientRowFull {
   id: string; code: string; display_name: string; legal_name: string; gstin: string | null; pan: string | null;
@@ -82,13 +82,15 @@ export interface ClientCreateInput {
   displayName: string; legalName: string; gstin?: string; pan?: string; stateCode: string;
   address: Record<string, unknown>; primaryContact: Record<string, unknown>; billingEmails: string[];
   notes?: string; force2fa?: boolean; code?: string;
-  firstAdmin: { name: string; email: string; mobile?: string };
+  firstAdmin: { name: string; email: string; mobile?: string; password: string };
 }
 
-/** CL-01/02: client + first Client Admin (invited) in ONE transaction. */
+/** CL-01/02: client + first Client Admin (active, password set by the Super Admin) in ONE transaction. No e-mail is sent. */
 export async function createClient(ctx: AdminTxCtx, input: ClientCreateInput, meta: RequestMeta): Promise<ClientDto> {
+  assertPasswordPolicy(input.firstAdmin.password);
+  const passwordHash = await hashPassword(input.firstAdmin.password);
   try {
-    const { id, outboxId } = await withAdmin(ctx, async (tx) => {
+    const { id } = await withAdmin(ctx, async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['ommis:client-code']);
       if (input.code) {
         const taken = await maybeOne(tx, 'SELECT 1 FROM app.clients WHERE code = $1', [input.code]);
@@ -108,10 +110,10 @@ export async function createClient(ctx: AdminTxCtx, input: ClientCreateInput, me
       await writeAudit(tx, actor, {
         action: 'client.create', entity: 'client', entityId: row.id, after: { ...input, code, firstAdmin: undefined },
       }, meta);
-      const invited = await inviteUser(tx, row.id, { ...input.firstAdmin, isClientAdmin: true, plantRoles: [] }, actor, meta);
-      return { id: row.id, outboxId: invited.outboxId };
+      const { password: _plain, ...admin } = input.firstAdmin;
+      await createActiveClientAdmin(tx, row.id, { ...admin, passwordHash }, actor, meta);
+      return { id: row.id };
     });
-    sendInBackground([outboxId]);
     return getClient(ctx, id);
   } catch (err) {
     if (isUniqueViolation(err, 'users_email_uq')) {

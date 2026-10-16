@@ -1,4 +1,4 @@
-import { api, bearer, lastEmailToken, loginAdmin, PASSWORD, seedSuperAdmin, seedTenant, uniq } from '../helpers';
+import { api, bearer, loginAdmin, PASSWORD, seedSuperAdmin, seedTenant, uniq } from '../helpers';
 
 let token: string;
 beforeAll(async () => {
@@ -19,7 +19,7 @@ function clientBody(email: string) {
     displayName: `Acme ${uniq()}`, legalName: 'Acme Water Pvt Ltd', stateCode: '27', gstin: '27AAACA1234A1Z5',
     address: { line1: '1 Main Road', city: 'Pune', pin: '411001' },
     primaryContact: { name: 'Ravi Kumar', email: 'ravi@acme.test' }, billingEmails: ['accounts@acme.test'],
-    firstAdmin: { name: 'Ravi Kumar', email },
+    firstAdmin: { name: 'Ravi Kumar', email, password: PASSWORD },
   };
 }
 
@@ -37,15 +37,17 @@ describe('plans', () => {
 });
 
 describe('clients', () => {
-  it('creates a client with its first admin, who accepts the invite and must accept terms', async () => {
+  it('creates a client with its first admin, who signs in with the set password and must accept terms', async () => {
     const email = `ca-${uniq()}@test.local`;
     const c = await api().post('/api/admin/v1/clients').set(A()).send(clientBody(email));
     expect(c.status).toBe(201);
     expect(c.body.data.code).toMatch(/^CL-\d{4}$/);
-    const inviteToken = await lastEmailToken(email, 'accept-invite');
-    const acc = await api().post('/api/v1/auth/invite/accept').send({ token: inviteToken, password: PASSWORD });
+    const acc = await api().post('/api/v1/auth/login').send({ email, password: PASSWORD });
     expect(acc.status).toBe(200);
     expect(acc.body.data).toMatchObject({ mfaRequired: false, mustAcceptTerms: true });
+    const weak = await api().post('/api/admin/v1/clients').set(A())
+      .send({ ...clientBody(`w-${uniq()}@test.local`), firstAdmin: { name: 'Ravi Kumar', email: `w-${uniq()}@test.local`, password: 'alllettersnodigits' } });
+    expect(weak.body.error.code).toBe('WEAK_PASSWORD');
     const dup = await api().post('/api/admin/v1/clients').set(A()).send(clientBody(email));
     expect(dup.body.error.code).toBe('EMAIL_IN_USE');
   });

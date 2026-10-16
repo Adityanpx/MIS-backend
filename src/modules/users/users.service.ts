@@ -144,6 +144,25 @@ export async function inviteUser(
   return { user, outboxId };
 }
 
+/** First Client Admin of a new client: active immediately with the password set by the Super Admin. No token, no email. */
+export async function createActiveClientAdmin(
+  tx: Tx,
+  tenantId: string,
+  input: { name: string; email: string; mobile?: string; passwordHash: string },
+  actor: AuditActor,
+  meta: RequestMeta,
+): Promise<UserDto> {
+  const { id } = await one<{ id: string }>(
+    tx,
+    `INSERT INTO app.users (tenant_id, name, email, mobile, is_client_admin, status, password_hash, created_by)
+     VALUES ($1, $2, $3, $4, true, 'active', $5, $6) RETURNING id`,
+    [tenantId, input.name, input.email, input.mobile ?? null, input.passwordHash, actor.actorId],
+  );
+  const user = await getUser(tx, tenantId, id);
+  await writeAudit(tx, actor, { action: 'user.create', entity: 'user', entityId: id, after: user }, meta);
+  return user;
+}
+
 export async function updateUser(
   tx: Tx,
   tenantId: string,

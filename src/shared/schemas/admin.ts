@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { BILLING_MODES, PLANT_TYPES } from '../enums';
 import { MAX_TENURE_MONTHS, MAX_CONTRACT_YEARS } from '../constants';
-import { address, contact, email, gstin, isoDate, mobile, moneyString, pan, personName, reason, stateCode, uuid } from './common';
+import { address, contact, email, gstin, isoDate, mobile, moneyString, pan, password, personName, reason, stateCode, uuid } from './common';
 
 export const superAdminCreateBody = z.object({ name: personName, email, mobile: mobile.optional() }).strict();
 export const superAdminPatchBody = z.object({ name: personName.optional(), mobile: mobile.nullable().optional() }).strict();
@@ -23,7 +23,7 @@ export const clientCreateBody = z
   .object({
     ...clientBase,
     code: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,20}$/).optional(),
-    firstAdmin: z.object({ name: personName, email, mobile: mobile.optional() }).strict(),
+    firstAdmin: z.object({ name: personName, email, mobile: mobile.optional(), password }).strict(),
   })
   .strict()
   .refine((b) => !b.gstin || b.gstin.slice(0, 2) === b.stateCode, {
