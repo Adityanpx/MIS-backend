@@ -10,10 +10,18 @@ interface Layer {
 function mountPath(layer: Layer): string {
   if (layer.regexp.fast_slash) return '';
   let i = 0;
+  const name = () => layer.keys?.[i++]?.name ?? 'param';
+  // Express' compiled regex format changed between majors: v4 escapes slashes (`\/`) and keeps the
+  // param group as `(?:([^\/]+?))` with the preceding literal slash outside; later versions keep the
+  // slashes unescaped and move it inside, as `(?:/([^/]+?))`. Handle both so the route list prints
+  // readable paths like `/plants/:plantId/foo` regardless of the installed Express.
   return layer.regexp.source
     .replace(/^\^/, '')
-    .replace(/\\\/\?\(\?=\\\/\|\$\)$/i, '')
-    .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, () => `:${layer.keys?.[i++]?.name ?? 'param'}`)
+    .replace(/\\\/\?\(\?=\\\/\|\$\)$/i, '')           // v4 trailing `\/?(?=\/|$)`
+    // Modern path-to-regexp emits the slash before the param group ESCAPED but keeps the one inside the
+    // character class bare (so the source reads `(?:\/([^/]+?))`). Match that exact shape.
+    .replace(/\(\?:\\\/\(\[\^\/\]\+\?\)\)/g, () => `/:${name()}`)
+    .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, () => `:${name()}`)  // v4 `(?:([^\/]+?))`
     .replace(/\\\//g, '/');
 }
 function walk(stack: Layer[], prefix: string, out: Set<string>): void {
