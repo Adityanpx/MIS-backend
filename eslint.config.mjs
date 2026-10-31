@@ -8,7 +8,7 @@ export default tseslint.config(
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', ignoreRestSiblings: true }],
       'no-console': 'error',
       'no-restricted-imports': ['error', {
         patterns: [{ group: ['**/db/pools', '**/db/pools.ts'],

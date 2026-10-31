@@ -110,6 +110,7 @@ export async function createClient(ctx: AdminTxCtx, input: ClientCreateInput, me
       await writeAudit(tx, actor, {
         action: 'client.create', entity: 'client', entityId: row.id, after: { ...input, code, firstAdmin: undefined },
       }, meta);
+      // Destructure to drop the plaintext password; only the hash is persisted (never log or carry it on).
       const { password: _plain, ...admin } = input.firstAdmin;
       await createActiveClientAdmin(tx, row.id, { ...admin, passwordHash }, actor, meta);
       return { id: row.id };
