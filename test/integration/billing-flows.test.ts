@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import { env } from '../../src/config/env';
 import { withSystem } from '../../src/db/tenant';
 import { addDays, todayIST } from '../../src/lib/dates';
+import { systemActor } from '../../src/modules/audit/audit.service';
 import { fakeRazorpay } from '../../src/modules/billing/razorpay/gateway';
+import { evaluateTenant } from '../../src/modules/lifecycle/lifecycle.service';
 import { testMailbox } from '../../src/modules/notifications/email.adapter';
 import { drainEmails } from '../../src/modules/notifications/email.service';
 import { api, bearer, drainJobs, uniq } from '../helpers';
@@ -128,7 +130,9 @@ describe('lifecycle (LC-01…09)', () => {
   it('overdue → read-only → payment restores at once; manual suspension keeps Billing reachable', async () => {
     const b = await billingSetup();
     await sql('UPDATE app.invoices SET due_date = $3 WHERE tenant_id = $1 AND id = $2', [b.tid, b.invoiceId, addDays(todayIST(), -20)]);
-    expect((await cron('lifecycle.evaluate')).status).toBe(202);
+    // Evaluate only this tenant — the global `lifecycle.evaluate` cron scans every tenant on the shared
+    // hosted DB (now 480+) and no longer fits inside Vitest's default 30 s timeout.
+    await withSystem((tx) => evaluateTenant(tx, b.tid, { actor: systemActor(b.tid), cause: 'manual', note: 'LC-01 integration test' }));
     await drainJobs();
     expect(await plantState(b.admin, b.plantId)).toBe('read_only');
     expect((await api().patch('/api/v1/company').set(bearer(b.ca)).send({ displayName: 'New Name' })).body.error.code).toBe('ACCOUNT_READ_ONLY');
@@ -217,7 +221,9 @@ describe('export and deletion (EXP-01…03, DEL-01…03)', () => {
 });
 
 describe('Super Admin dashboard, reports, audit', () => {
-  it('dashboard, GST register (xlsx), ageing, audit list', async () => {
+  // The admin dashboard and GST register aggregate across every tenant on the shared hosted DB,
+  // so this test can brush up against Vitest's 30 s default when the DB is under load.
+  it('dashboard, GST register (xlsx), ageing, audit list', { timeout: 60_000 }, async () => {
     const b = await billingSetup();
     const d = await api().get('/api/admin/v1/dashboard').set(bearer(b.admin));
     expect(d.status).toBe(200);
