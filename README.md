@@ -24,6 +24,14 @@ npm run dev
 `npm test` resets and migrates the `ommis_test` database automatically, then runs unit,
 integration and tenant-isolation tests. Also run `npm run typecheck`, `npm run lint`, `npm run check-rls`.
 
+## Acceptance tests (Agreement Schedule A Part 4)
+- (a) Calculation correctness: `test/golden/`
+- (b) Multi-tenant isolation: `test/isolation/`
+- (c) PRD §25.2 scenarios T01–T30: `test/acceptance/`
+- (d) MIS PDF exactly 5 pages: `test/unit/pdf-mis-pages.test.ts`
+
+Run everything with `npm test`. Run only (c) with `npm run test:acceptance`.
+
 ## Folder structure
 ```
 src/
@@ -36,8 +44,11 @@ src/
   middleware/   request-id, http-logger, security, rate-limit, error-handler, auth-client, auth-admin,
                 require-role, plant-access, account-state, internal-auth
   routes/       client.routes.ts, admin.routes.ts
-  modules/      health, platform, audit, notifications, files, auth, admin-auth, domain, users,
-                admin/{super-admins,clients,plans,plants,subscriptions}, company, plants
+  modules/      admin/{act-as, announcements, audit, billing, clients, dashboard, deletion, notifications,
+                       plans, plants, reports, settings, subscriptions, super-admins, usage},
+                admin-auth, audit, auth, billing, client-billing, company, domain, engine, exports,
+                files, health, imports, insights, lifecycle, logsheets, maintenance, notifications,
+                pdf, plants, platform, reports, settings, users
 scripts/        create-super-admin.ts, check-rls.ts
-test/           unit/, integration/, isolation/
+test/           unit/, integration/, isolation/, golden/, acceptance/
 ```
