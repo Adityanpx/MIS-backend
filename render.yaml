@@ -13,7 +13,8 @@ services:
       - { key: PORT, value: "4000" }
       - { key: LOG_LEVEL, value: info }
       - { key: JOBS_MODE, value: boss }
-      - { key: PDF_ENABLED, value: "false" }        # TEMP: free plan has 512 MB; enable on Starter
+      - { key: PDF_ENABLED, value: "true" }
+      - { key: CHROME_EXECUTABLE_PATH, value: /usr/bin/chromium }
       - { key: PDF_MAX_PER_BROWSER, value: "50" }
       - { key: STORAGE_DRIVER, value: local }      # TEMP: files are lost on every deploy; switch to r2
       - { key: LOCAL_STORAGE_DIR, value: /tmp/storage }

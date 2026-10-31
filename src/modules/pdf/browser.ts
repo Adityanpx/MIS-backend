@@ -7,9 +7,14 @@ let browser: Browser | null = null;
 let used = 0;
 let queue: Promise<unknown> = Promise.resolve();
 
+// On Render (and any non-local deploy) the Dockerfile installs system Chromium and sets CHROME_EXECUTABLE_PATH.
+// If that var is missing but we're not on a dev machine, fall back to @sparticuz/chromium rather than puppeteer's
+// default cache path (which won't exist when PUPPETEER_SKIP_DOWNLOAD=true).
+const isServer = isProd || !!process.env.RENDER;
+
 async function executablePath(): Promise<string> {
   if (env.CHROME_EXECUTABLE_PATH) return env.CHROME_EXECUTABLE_PATH;
-  if (isProd) return (await import('@sparticuz/chromium')).default.executablePath();
+  if (isServer) return (await import('@sparticuz/chromium')).default.executablePath();
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- dev-only dependency
   return (require('puppeteer') as { executablePath: () => string }).executablePath();
 }
@@ -18,7 +23,7 @@ async function getBrowser(): Promise<Browser> {
   if (browser) await browser.close().catch(() => undefined);
   const args = env.CHROME_EXECUTABLE_PATH
     ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--font-render-hinting=none']
-    : isProd ? (await import('@sparticuz/chromium')).default.args : ['--no-sandbox', '--disable-dev-shm-usage'];
+    : isServer ? (await import('@sparticuz/chromium')).default.args : ['--no-sandbox', '--disable-dev-shm-usage'];
   browser = await puppeteer.launch({ executablePath: await executablePath(), args, headless: true });
   used = 0;
   return browser;
