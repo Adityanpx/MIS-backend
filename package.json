@@ -21,7 +21,8 @@
     "create-super-admin": "tsx scripts/create-super-admin.ts",
     "check-rls": "tsx scripts/check-rls.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:acceptance": "vitest run test/acceptance"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1148.0",
