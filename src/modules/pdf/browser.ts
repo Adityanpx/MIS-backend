@@ -48,7 +48,9 @@ export function renderPdf(html: string, opts: PdfOptions): Promise<Buffer> {
   queue = p.catch(() => undefined);
   return p;
 }
-/** PDF-01 test aid: counts pages (the MIS must be exactly 1). */
+/** Test aid: counts /Page objects in the PDF stream.
+ *  Per Schedule A Part 4(d) the MIS PDF must be exactly 5 pages;
+ *  the daily logsheet and billing PDFs are 1 page each. */
 export const pdfPageCount = (buf: Buffer) => (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
 export async function closeBrowser(): Promise<void> {
   if (browser) await browser.close().catch(() => undefined);

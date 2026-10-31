@@ -14,8 +14,18 @@ export const BASE_CSS = `
   table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #555; padding: 2px 4px; }
   th { background: #1f3864; color: #fff; font-weight: 600; } .bad { color: #c00000; font-weight: 700; } .ok { color: #1f4e9a; }
   .num { text-align: right; } .muted { color: #666; } h1, h2, h3 { margin: 0; }
-  .footer { position: fixed; bottom: 4mm; left: 8mm; right: 8mm; font-size: 8px; color: #666; display: flex; justify-content: space-between; }`;
-export function footer(meta: { generatedAt: string; version: number; status: string; platform: string }): string {
+  /* Static (not fixed) so each page's footer flows naturally at the bottom of its own page content;
+     the MIS template emits one footer() per .page section, so this prints once per page. */
+  .footer { position: static; margin-top: 4mm; font-size: 8px; color: #666; display: flex; justify-content: space-between; }`;
+/**
+ * Common footer line. `pageNo` / `totalPages` default to 1, which stays correct for the single-page
+ * dashboard, logsheet and billing PDFs. The MIS template passes 1..5 and 5 per Schedule A Part 4(d).
+ */
+export function footer(
+  meta: { generatedAt: string; version: number; status: string; platform: string },
+  pageNo = 1,
+  totalPages = 1,
+): string {
   return `<div class="footer"><span>Generated ${esc(meta.generatedAt.replace('T', ' ').slice(0, 16))} UTC by ${esc(meta.platform)}</span>
-    <span>Version v${meta.version} · Logsheet: ${esc(meta.status)}</span><span>Page 1 of 1</span></div>`;
+    <span>Version v${meta.version} · Logsheet: ${esc(meta.status)}</span><span>Page ${pageNo} of ${totalPages}</span></div>`;
 }
