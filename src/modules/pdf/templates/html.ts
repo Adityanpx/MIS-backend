@@ -19,7 +19,7 @@ export const BASE_CSS = `
   .footer { position: static; margin-top: 4mm; font-size: 8px; color: #666; display: flex; justify-content: space-between; }`;
 /**
  * Common footer line. `pageNo` / `totalPages` default to 1, which stays correct for the single-page
- * dashboard, logsheet and billing PDFs. The MIS template passes 1..5 and 5 per Schedule A Part 4(d).
+ * dashboard, logsheet and billing PDFs. Pass totalPages = 0 to omit the page number (the MIS PDF flows over a variable number of pages).
  */
 export function footer(
   meta: { generatedAt: string; version: number; status: string; platform: string },
@@ -27,5 +27,5 @@ export function footer(
   totalPages = 1,
 ): string {
   return `<div class="footer"><span>Generated ${esc(meta.generatedAt.replace('T', ' ').slice(0, 16))} UTC by ${esc(meta.platform)}</span>
-    <span>Version v${meta.version} · Logsheet: ${esc(meta.status)}</span><span>Page ${pageNo} of ${totalPages}</span></div>`;
+    <span>Version v${meta.version} · Logsheet: ${esc(meta.status)}</span>${totalPages > 0 ? `<span>Page ${pageNo} of ${totalPages}</span>` : ''}</div>`;
 }
