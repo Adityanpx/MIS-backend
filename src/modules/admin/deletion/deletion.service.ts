@@ -8,7 +8,7 @@ import { adminActor, writeAudit } from '../../audit/audit.service';
 
 /** FK-safe order. Table names come from this constant only (never from input). */
 export const OPERATIONAL_TABLES = [
-  'logsheet_value_history', 'logsheet_values', 'correction_requests', 'attachments', 'logsheets', 'imports', 'daily_derived',
+  'logsheet_value_history', 'logsheet_values', 'correction_requests', 'attachments', 'logsheets', 'daily_derived',
   'pdf_documents', 'revenue_components', 'contract_years', 'parameter_standards', 'parameters', 'stock_adjustments', 'stock_items',
   'staff_strengths', 'staff_categories', 'safety_requirements', 'safety_items', 'plant_constants', 'bank_guarantees',
   'insurance_policies', 'plant_settings', 'plant_data_versions', 'exports', 'notifications', 'dashboard_layouts', 'user_plant_roles', 'refresh_tokens',

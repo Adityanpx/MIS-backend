@@ -1,4 +1,3 @@
-import ExcelJS from 'exceljs';
 import { withSystem } from '../../src/db/tenant';
 import { api, bearer, drainJobs } from '../helpers';
 import { livePlant, validValues } from '../phase2-helpers';
@@ -88,27 +87,3 @@ describe('logsheets', () => {
   });
 });
 
-describe('import (template mapping)', () => {
-  it('dry run reports errors and conversions, apply inserts logsheets', async () => {
-    const p = await livePlant();
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Data');
-    ws.addRow(['DATE', 'INFLOW', 'EB_KWH', 'LIME_RECEIVED']);
-    ws.addRow(['2024-09-01', 120, 18000, 'z']);
-    ws.addRow(['2024-09-02', '121', 18100, 0]);
-    const buf = Buffer.from(await wb.xlsx.writeBuffer());
-    const up = await api().post(`/api/v1/plants/${p.plantId}/imports`).set(bearer(p.ca))
-      .field('mapping', 'template').attach('file', buf, 'data.xlsx');
-    expect(up.status).toBe(202);
-    await drainJobs();
-    const rep = await api().get(`/api/v1/plants/${p.plantId}/imports/${up.body.data.id}`).set(bearer(p.ca));
-    expect(rep.body.data.status).toBe('validated');
-    expect(rep.body.data.report.errors.some((e: { message: string }) => e.message === 'Not a number')).toBe(true);
-    expect(rep.body.data.report.conversions).toHaveLength(1);
-    const ap = await api().post(`/api/v1/plants/${p.plantId}/imports/${up.body.data.id}/apply`).set(bearer(p.ca)).send({ skipErrorRows: true });
-    expect(ap.status).toBe(202);
-    await drainJobs();
-    const done = await api().get(`/api/v1/plants/${p.plantId}/imports/${up.body.data.id}`).set(bearer(p.ca));
-    expect(done.body.data.status).toBe('applied');
-  });
-});

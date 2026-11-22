@@ -49,7 +49,6 @@ a workaround exists.
 | T11  | One NEFT allocated across 3 invoices with excess | Medium | `t-billing.test.ts` |
 | T12  | Cash ≥ ₹2,00,000 in a day | Medium | `t-billing.test.ts` |
 | T13  | Tenant isolation test | **CRITICAL** | `t-isolation.test.ts` |
-| T14  | Import the Excel DATA ENTRY sheet | High | `t-imports-exports.test.ts` |
 | T15  | Monthly report for Sep-2026 (BGE hours, BGE kWh) | High | `t-engine.test.ts` |
 | T16  | BG with an end date before D | Medium | `t-mis-reports.test.ts` |
 | T17  | Dashboard arrows | Medium | `t-mis-reports.test.ts` |

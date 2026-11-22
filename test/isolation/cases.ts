@@ -42,7 +42,7 @@ export const EXEMPT: Record<string, string> = {
   'GET /company/portfolio': 'own tenant only (built from listPlants, same as /plants)',
 };
 
-export interface Victim2 extends Victim { paramId: string; stockItemId: string; bgId: string; notificationId: string; exportId: string; pdfId: string; importId: string; correctionId: string }
+export interface Victim2 extends Victim { paramId: string; stockItemId: string; bgId: string; notificationId: string; exportId: string; pdfId: string; correctionId: string }
 
 /** Fills :params of a route for the generic plant rule. */
 export function fillPlantRoute(route: string, b: Victim): { method: IsolationCase['method']; path: string } {
@@ -61,7 +61,6 @@ export const CASES_P2 = (b: Victim2, a: Attacker): Array<{ method: IsolationCase
   { method: 'post', path: `/plants/${a.plantId}/settings/copy-from`, body: { sourcePlantId: b.plantId } },
   { method: 'post', path: `/plants/${a.plantId}/logsheets/correction-requests/${b.correctionId}/approve`, body: {} },
   { method: 'get', path: `/plants/${a.plantId}/pdfs/${b.pdfId}/download` },
-  { method: 'get', path: `/plants/${a.plantId}/imports/${b.importId}` },
   { method: 'post', path: '/notifications/' + b.notificationId + '/read' },
   { method: 'get', path: `/exports/${b.exportId}` },
   { method: 'get', path: `/exports/${b.exportId}/download` },

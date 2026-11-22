@@ -47,7 +47,7 @@ src/
   modules/      admin/{act-as, announcements, audit, billing, clients, dashboard, deletion, notifications,
                        plans, plants, reports, settings, subscriptions, super-admins, usage},
                 admin-auth, audit, auth, billing, client-billing, company, domain, engine, exports,
-                files, health, imports, insights, lifecycle, logsheets, maintenance, notifications,
+                files, health, insights, lifecycle, logsheets, maintenance, notifications,
                 pdf, plants, platform, reports, settings, users
 scripts/        create-super-admin.ts, check-rls.ts
 test/           unit/, integration/, isolation/, golden/, acceptance/

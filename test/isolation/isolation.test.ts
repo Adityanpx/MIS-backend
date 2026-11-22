@@ -90,11 +90,10 @@ describe('tenant isolation harness', () => {
         VALUES ($1, '{}'::jsonb, 'ready', $3, $2) RETURNING id`, [B.tenantId, B.admin.id, `t/${B.tenantId}/exports/x.zip`]);
       const pdfId = await q(`INSERT INTO app.pdf_documents (tenant_id, plant_id, d, doc_type, version, file_key, status)
         VALUES ($1, $2, '2025-01-01', 'mis', 1, $3, 'current') RETURNING id`, [B.tenantId, bPlant, `t/${B.tenantId}/p/${bPlant}/x.pdf`]);
-      const importId = await q(`INSERT INTO app.imports (tenant_id, plant_id, file_key, mapping) VALUES ($1, $2, 'k', 'template') RETURNING id`, [B.tenantId, bPlant]);
       const sheet = await q(`INSERT INTO app.logsheets (tenant_id, plant_id, log_date, status) VALUES ($1, $2, '2025-01-01', 'submitted') RETURNING id`, [B.tenantId, bPlant]);
       const correctionId = await q(`INSERT INTO app.correction_requests (tenant_id, logsheet_id, requested_by, reason, proposed)
         VALUES ($1, $2, $3, 'reason text', '[]'::jsonb) RETURNING id`, [B.tenantId, sheet, B.admin.id]);
-      return { paramId, stockItemId, bgId, notificationId, exportId, pdfId, importId, correctionId };
+      return { paramId, stockItemId, bgId, notificationId, exportId, pdfId, correctionId };
     });
     const victim = { tenantId: B.tenantId, plantId: bPlant, userId: B.admin.id, adminId: B.admin.id, ...ids };
     const { token } = await loginClient(A.admin.email);

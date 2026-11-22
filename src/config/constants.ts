@@ -20,7 +20,6 @@ export const LOCK_MINUTES = 15;               // logsheet edit lock (LOG-14)
 export const EXPIRING_ALERT_DAYS = 30;        // BG / insurance EXPIRING status (BG-04)
 export const ENGINE_CACHE_MAX = 30;           // cached plant bundles (each holds all days of one plant)
 export const ENGINE_CACHE_TTL_MS = 10 * 60_000;
-export const IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 export const ACT_AS_CODE_TTL_SEC = 60;            // TRD §5.4.5: one-time code
 export const ACT_AS_SESSION_MINUTES = 60;         // PRD ACT-03
 export const PROOF_MAX_BYTES = 5 * 1024 * 1024;   // payment proof / TDS certificate (OFF-01)
