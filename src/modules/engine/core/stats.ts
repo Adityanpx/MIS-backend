@@ -1,6 +1,7 @@
 import type { StandardKind } from '../../../shared/enums';
 import { isActive, standardAt, valueAt } from './effective';
 import { dayValue } from './derive';
+import { daysInclusive, monthEnd, monthStart } from '../../../lib/dates';
 import { eachDay, monthAnchors, type Period, type Periods } from './periods';
 import type { DerivedMap, EngineData, EngineSettings, Flag, ISODate, ParamDef } from './types';
 
@@ -49,9 +50,22 @@ export function actual(data: EngineData, derived: DerivedMap, p: ParamDef, perio
 
 /** STD over a period: per-day standards summed day by day; monthly allowances per §13.2. `kind` picks Bidding or Actual. */
 export function standard(
-  s: EngineSettings, p: ParamDef, period: Period, periodKind: 'today' | 'mtd' | 'utd', periods: Periods, kind: StandardKind,
+  s: EngineSettings, p: ParamDef, period: Period, periodKind: 'today' | 'mtd' | 'utd' | 'range', periods: Periods, kind: StandardKind,
 ): number | null {
   if (p.stdType === 'monthly_allowance') {
+    if (periodKind === 'range') {
+      // a free window: each day carries its month's allowance spread evenly over that month's days
+      let sum = 0;
+      let any = false;
+      for (const d of eachDay(period)) {
+        const m = standardAt(p, d, kind)?.monthly;
+        if (m != null) {
+          sum += m / daysInclusive(monthStart(d), monthEnd(d));
+          any = true;
+        }
+      }
+      return any ? sum : null;
+    }
     if (periodKind === 'today') return standardAt(p, period.to, kind)?.std ?? null;
     if (periodKind === 'mtd') return standardAt(p, period.to, kind)?.monthly ?? null;
     let sum = 0;

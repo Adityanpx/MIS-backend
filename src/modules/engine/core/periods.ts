@@ -4,14 +4,18 @@ import type { ISODate } from './types';
 export interface Period { from: ISODate; to: ISODate; days: number }
 export interface Periods {
   today: Period; mtd: Period; utd: Period;
+  /** The user's own from..reportDate window (equals `today` when no range was asked for). */
+  range: Period;
   monthsElapsed: number; omMonthNo: number; reportDate: ISODate;
 }
-export function periodsFor(d: ISODate, misStart: ISODate, omStart: ISODate): Periods {
+export function periodsFor(d: ISODate, misStart: ISODate, omStart: ISODate, from?: ISODate | null): Periods {
   const ms = maxDate(monthStart(d), misStart);
+  const rf = from && from < d ? maxDate(from, misStart) : d;
   return {
     today: { from: d, to: d, days: 1 },
     mtd: { from: ms, to: d, days: daysInclusive(ms, d) },
     utd: { from: misStart, to: d, days: daysInclusive(misStart, d) },
+    range: { from: rf, to: d, days: daysInclusive(rf, d) },
     monthsElapsed: datedifMonths(misStart, d) + 1,
     omMonthNo: datedifMonths(omStart, d) + 1,
     reportDate: d,

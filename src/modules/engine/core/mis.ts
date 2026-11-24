@@ -12,12 +12,14 @@ export interface ResultLine { qty: number | null; pct: number | null; text: stri
 /** v1.1 (C2): one kind's (Bidding or Actual) full set of results for a parameter. */
 export interface PerKind {
   today: Triple; mtd: Triple; utd: Triple;
+  /** The user's own from..date window; equals `today` when no range was asked for. */
+  range: Triple;
   events: { mtd: number; utd: number; flag: Flag };
-  results: { today: ResultLine; mtd: ResultLine; utd: ResultLine };
+  results: { today: ResultLine; mtd: ResultLine; utd: ResultLine; range: ResultLine };
   /** Average per day over each period (the day's own value for Daily). */
-  avg: { today: number | null; mtd: number | null; utd: number | null };
+  avg: { today: number | null; mtd: number | null; utd: number | null; range: number | null };
   /** Number of logged days in each period on which the value was outside the standard ("limit exceeded"). */
-  exceed: { today: number; mtd: number; utd: number };
+  exceed: { today: number; mtd: number; utd: number; range: number };
 }
 export interface ParamRowOut {
   code: string; name: string; unit: string; decimals: number; direction: string;
@@ -54,15 +56,16 @@ function perKind(b: Bundle, p: ParamDef, per: Periods, kind: StandardKind): PerK
   );
   const mtd = triple(standard(s, p, per.mtd, 'mtd', per, kind), actual(b.data, b.derived, p, per.mtd), p.direction);
   const utd = triple(standard(s, p, per.utd, 'utd', per, kind), actual(b.data, b.derived, p, per.utd), p.direction);
+  const range = triple(standard(s, p, per.range, 'range', per, kind), actual(b.data, b.derived, p, per.range), p.direction);
   const ev = { mtd: events(s, b.data, b.derived, p, per.mtd, kind), utd: events(s, b.data, b.derived, p, per.utd, kind) };
   // totals (sum parameters) are divided by the period's days; averages / snapshots are already per-day values
   const avgOf = (act: number | null, period: Period) => (p.aggregation === 'sum' ? avgPerDay(b, act, period) : act);
   return {
-    today, mtd, utd,
+    today, mtd, utd, range,
     events: { ...ev, flag: ev.mtd + ev.utd > 0 ? 'bad' : 'ok' },
-    results: { today: mkResult(today, p.resultNoun, p.direction), mtd: mkResult(mtd, p.resultNoun, p.direction), utd: mkResult(utd, p.resultNoun, p.direction) },
-    avg: { today: avgOf(today.act, per.today), mtd: avgOf(mtd.act, per.mtd), utd: avgOf(utd.act, per.utd) },
-    exceed: { today: events(s, b.data, b.derived, p, per.today, kind), mtd: ev.mtd, utd: ev.utd },
+    results: { today: mkResult(today, p.resultNoun, p.direction), mtd: mkResult(mtd, p.resultNoun, p.direction), utd: mkResult(utd, p.resultNoun, p.direction), range: mkResult(range, p.resultNoun, p.direction) },
+    avg: { today: avgOf(today.act, per.today), mtd: avgOf(mtd.act, per.mtd), utd: avgOf(utd.act, per.utd), range: avgOf(range.act, per.range) },
+    exceed: { today: events(s, b.data, b.derived, p, per.today, kind), mtd: ev.mtd, utd: ev.utd, range: events(s, b.data, b.derived, p, per.range, kind) },
   };
 }
 /** Resolves PAR-19: a parameter's own override, 'none' meaning "inherit the plant default". */
@@ -112,14 +115,15 @@ export function revenueRow(b: Bundle, per: Periods): ParamRowOut {
     const today = mk(per.today);
     const mtd = mk(per.mtd);
     const utd = mk(per.utd);
+    const range = mk(per.range);
     const e = { mtd: ev(per.mtd, kind), utd: ev(per.utd, kind) };
     return {
-      today, mtd, utd, events: { ...e, flag: e.mtd + e.utd > 0 ? 'bad' : 'ok' },
+      today, mtd, utd, range, events: { ...e, flag: e.mtd + e.utd > 0 ? 'bad' : 'ok' },
       results: { today: mkResult(today, 'REVENUE GENERATED', 'higher_better'), mtd: mkResult(mtd, 'REVENUE GENERATED', 'higher_better'),
-        utd: mkResult(utd, 'REVENUE GENERATED', 'higher_better') },
+        utd: mkResult(utd, 'REVENUE GENERATED', 'higher_better'), range: mkResult(range, 'REVENUE GENERATED', 'higher_better') },
       avg: { today: today.act === null ? null : today.act / per.today.days, mtd: mtd.act === null ? null : mtd.act / per.mtd.days,
-        utd: utd.act === null ? null : utd.act / per.utd.days },
-      exceed: { today: ev(per.today, kind), mtd: e.mtd, utd: e.utd },
+        utd: utd.act === null ? null : utd.act / per.utd.days, range: range.act === null ? null : range.act / per.range.days },
+      exceed: { today: ev(per.today, kind), mtd: e.mtd, utd: e.utd, range: ev(per.range, kind) },
     };
   };
   const bidding = mkKind('bidding');
@@ -149,9 +153,9 @@ export function registerOn(rows: RegisterDef[], d: ISODate) {
   return { record: r, status, claimUpTo };
 }
 
-export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string | null; generatedAt?: string } = {}) {
+export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string | null; generatedAt?: string } = {}, from?: ISODate | null) {
   const s = b.settings;
-  const per = periodsFor(d, s.plant.misStart, s.plant.omStart);
+  const per = periodsFor(d, s.plant.misStart, s.plant.omStart, from);
   const active = s.params.filter((p) => (!p.activeTo || p.activeTo >= per.mtd.from));
   const rec = b.data.days.get(d);
   const dd = b.derived.get(d);
@@ -229,6 +233,7 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
       companyName: s.display.companyName, plantName: s.plant.name, clientName: s.display.clientName,
       misStart: s.plant.misStart, omStart: s.plant.omStart, omEnd: s.plant.omEnd, tenureMonths: s.plant.tenureMonths,
       omMonthNo: per.omMonthNo, omYearNo: year ? String(year.yearNo).padStart(2, '0') : null, reportDate: d,
+      rangeFrom: per.range.from, rangeTo: per.range.to, rangeDays: per.range.days, rangeDataDays: dataDays(b.data, per.range),
       mtdDays: per.mtd.days, utdDays: per.utd.days, mtdDataDays: dataDays(b.data, per.mtd), utdDataDays: dataDays(b.data, per.utd),
       monthsElapsed: per.monthsElapsed, lastCorrectedAt: meta.lastCorrectedAt ?? rec?.correctedAt ?? null,
       logsheet: rec ? { status: rec.status, version: rec.version, submittedBy: rec.submittedByName, submittedAt: rec.submittedAt } : null,

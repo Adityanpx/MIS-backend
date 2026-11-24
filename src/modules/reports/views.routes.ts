@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { clientCtx } from '../../lib/context';
 import { addDays, todayIST } from '../../lib/dates';
-import { notFound } from '../../lib/errors';
+import { badRequest, notFound } from '../../lib/errors';
 import { asyncHandler, ok } from '../../lib/http';
 import { parseQuery } from '../../lib/validate';
 import { accountState } from '../../middleware/account-state';
@@ -40,11 +40,13 @@ async function send(res: Response, req: Request, t: ReportTable) {
   return ok(res, t);
 }
 
-const dateQ = z.object({ date: isoDate.optional() }).passthrough();
+const dateQ = z.object({ date: isoDate.optional(), from: isoDate.optional() }).passthrough();
 viewsRouter.get('/mis', ...gate, asyncHandler(async (req, res) => {
   const b = await getBundle(clientCtx(req).tenantId, P(req).id);
-  const d = parseQuery(req, dateQ).date ?? latestDate(b) ?? addDays(todayIST(), -1);
-  ok(res, { ...buildMis(b, d), versions: { data: b.dataVersion, settings: b.settingsVersion } });
+  const q = parseQuery(req, dateQ);
+  const d = q.date ?? latestDate(b) ?? addDays(todayIST(), -1);
+  if (q.from && q.from > d) throw badRequest('INVALID_RANGE', 'The start date is after the end date.');
+  ok(res, { ...buildMis(b, d, {}, q.from), versions: { data: b.dataVersion, settings: b.settingsVersion } });
 }));
 viewsRouter.get('/dashboard', ...gate, asyncHandler(async (req, res) => {
   const b = await getBundle(clientCtx(req).tenantId, P(req).id);

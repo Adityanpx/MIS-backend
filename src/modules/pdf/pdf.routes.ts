@@ -51,11 +51,12 @@ pdfRouter.get('/file', plantAccess('any'), accountState('read'), asyncHandler(as
     date: isoDate,
     type: z.enum(['logsheet', 'mis', 'dashboard']),
     // MIS only: the Daily / Monthly / UTD and Actual / Bidding filters chosen on the page
-    period: z.enum(['today', 'mtd', 'utd']).optional(),
-    kind: z.enum(['actual', 'bidding']).optional(),
+    period: z.enum(['today', 'mtd', 'utd', 'range', 'all']).optional(),
+    kind: z.enum(['actual', 'bidding', 'both']).optional(),
+    from: isoDate.optional(),
   }));
   const { key, file } = q.type === 'mis' && q.period && q.kind
-    ? await misFilteredPdf(ctx.tenantId, P(req).id, q.date, { period: q.period, kind: q.kind })
+    ? await misFilteredPdf(ctx.tenantId, P(req).id, q.date, { period: q.period, kind: q.kind, from: q.from && q.from < q.date ? q.from : null })
     : await pdfForDownload(ctx.tenantId, P(req).id, q.date, q.type);
   assertTenantKey(key, ctx.tenantId); // PDF-09
   sendPdf(res, key, file);

@@ -39,7 +39,7 @@ export async function documentHtml(
     (await one<{ logo_key: string | null }>(tx, 'SELECT logo_key FROM app.clients WHERE id = $1', [tenantId])).logo_key);
   const meta = { version, platform: await platformName(), generatedAt: new Date().toISOString(), logoUrl: await signedUrlOrNull(logoKey) };
   // archived (auto) MIS: Daily · the plant's primary standard; the MIS page's Download passes the user's own filter
-  if (doc === 'mis') return misHtml(buildMis(b, d, { generatedAt: meta.generatedAt }), meta, filter ?? { period: 'today', kind: b.settings.primaryStandard });
+  if (doc === 'mis') return misHtml(buildMis(b, d, { generatedAt: meta.generatedAt }, filter?.from), meta, filter ?? { period: 'today', kind: b.settings.primaryStandard });
   if (doc === 'dashboard') return dashboardHtml(buildDashboard(b, d), meta);
   return logsheetHtml(b, d, meta);
 }
@@ -116,14 +116,14 @@ export async function pdfForDownload(tenantId: string, plantId: string, d: strin
   return made;
 }
 
-const PERIOD_FILE: Record<MisFilter['period'], string> = { today: 'DAILY', mtd: 'MONTHLY', utd: 'UTD' };
+const PERIOD_FILE: Record<MisFilter['period'], string> = { today: 'DAILY', mtd: 'MONTHLY', utd: 'UTD', range: 'RANGE', all: 'ALL' };
 
 /** MIS PDF for exactly the filter on screen (Daily / Monthly / UTD × Actual / Bidding). Built fresh on every click, never archived. */
 export async function misFilteredPdf(tenantId: string, plantId: string, d: string, filter: MisFilter): Promise<{ key: string; file: Buffer }> {
   if (!env.PDF_ENABLED) throw badRequest('PDF_DISABLED', 'PDF generation is turned off.');
   const b = await getBundle(tenantId, plantId);
   const file = await renderPdf(await documentHtml(tenantId, plantId, d, 'mis', 1, filter), { format: 'A4', landscape: true });
-  const disp = formatDisplayDate(d).toUpperCase();
+  const disp = (filter.from && filter.from < d ? `${formatDisplayDate(filter.from)} TO ${formatDisplayDate(d)}` : formatDisplayDate(d)).toUpperCase();
   const name = `${docTitle('mis', b.settings.display.pdfPrefixMis)} ${disp} ${PERIOD_FILE[filter.period]} ${filter.kind.toUpperCase()}.pdf`;
   return { key: tenantKey(tenantId, 'p', plantId, 'pdf', name), file };
 }
