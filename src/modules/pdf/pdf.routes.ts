@@ -17,7 +17,7 @@ import { isoDate, uuid } from '../../shared/schemas/common';
 import { clientActor, writeAudit } from '../audit/audit.service';
 import { readStoredFile } from '../exports/download';
 import { assertTenantKey } from '../files/storage';
-import { pdfForDownload, type DocType } from './pdf.service';
+import { misFilteredPdf, pdfForDownload, type DocType } from './pdf.service';
 
 export const pdfRouter = Router({ mergeParams: true });
 const P = (req: Request) => {
@@ -47,8 +47,16 @@ function sendPdf(res: Response, key: string, file: Buffer) {
 /** One click, always a file: the newest version of a date's document, regenerated first if its stored file is gone. */
 pdfRouter.get('/file', plantAccess('any'), accountState('read'), asyncHandler(async (req, res) => {
   const ctx = clientCtx(req);
-  const q = parseQuery(req, z.object({ date: isoDate, type: z.enum(['logsheet', 'mis', 'dashboard']) }));
-  const { key, file } = await pdfForDownload(ctx.tenantId, P(req).id, q.date, q.type);
+  const q = parseQuery(req, z.object({
+    date: isoDate,
+    type: z.enum(['logsheet', 'mis', 'dashboard']),
+    // MIS only: the Daily / Monthly / UTD and Actual / Bidding filters chosen on the page
+    period: z.enum(['today', 'mtd', 'utd']).optional(),
+    kind: z.enum(['actual', 'bidding']).optional(),
+  }));
+  const { key, file } = q.type === 'mis' && q.period && q.kind
+    ? await misFilteredPdf(ctx.tenantId, P(req).id, q.date, { period: q.period, kind: q.kind })
+    : await pdfForDownload(ctx.tenantId, P(req).id, q.date, q.type);
   assertTenantKey(key, ctx.tenantId); // PDF-09
   sendPdf(res, key, file);
 }));

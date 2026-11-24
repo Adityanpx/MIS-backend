@@ -127,17 +127,17 @@ describe('Acceptance — MIS report, dashboard, Portfolio and PDF', () => {
   );
 
   it(
-    'T28 — MIS PDF for a date renders the simple layout: Daily / Monthly / UTD columns, no blank page',
+    'T28 — MIS PDF prints only the chosen filter (Monthly · Actual), no blank page',
     async () => {
       const { settings, data } = goldenInput();
       const settingsOn = { ...settings, maintenance: { ...settings.maintenance, enabled: true } };
       const bundle: Bundle = { settings: settingsOn, data, derived: computeDerived(settingsOn, data, D) };
-      const html = misHtml(buildMis(bundle, D), META);
+      const html = misHtml(buildMis(bundle, D), META, { period: 'mtd', kind: 'actual' });
       const pdf = await renderPdf(html, { format: 'A4', landscape: true });
-      expect(html).toContain('DAILY');
       expect(html).toContain('MONTHLY');
-      expect(html).toContain('UTD');
-      expect(pdfPageCount(pdf), 'MIS PDF has no blank trailing page').toBeGreaterThanOrEqual(2);
+      expect(html).not.toContain('DAILY');
+      expect(html).not.toContain('BIDDING STANDARD');
+      expect(pdfPageCount(pdf), 'MIS PDF has no blank trailing page').toBe(1);
     },
     60_000,
   );

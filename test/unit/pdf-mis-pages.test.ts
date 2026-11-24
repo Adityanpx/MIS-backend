@@ -2,45 +2,51 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { computeDerived } from '../../src/modules/engine/core/derive';
 import { buildMis, type Bundle } from '../../src/modules/engine/core/mis';
 import { closeBrowser, pdfPageCount, renderPdf } from '../../src/modules/pdf/browser';
-import { misHtml } from '../../src/modules/pdf/templates/mis';
+import { misHtml, type MisFilter } from '../../src/modules/pdf/templates/mis';
 import { goldenInput } from '../golden/fixture';
 
 afterAll(closeBrowser);
 
 const META = { version: 1, platform: 'OMMIS Test' };
-/** Any date for which the golden fixture has data — all three cases use the same date for determinism. */
+/** Any date for which the golden fixture has data. */
 const D = '2026-09-21';
 
-async function render(bundle: Bundle, date: string): Promise<number> {
-  const html = misHtml(buildMis(bundle, date), META);
-  const pdf = await renderPdf(html, { format: 'A4', landscape: true });
-  return pdfPageCount(pdf);
+function bundle(): Bundle {
+  const { settings, data } = goldenInput();
+  return { settings, data, derived: computeDerived(settings, data, D) };
 }
+const html = (f: MisFilter) => misHtml(buildMis(bundle(), D), META, f);
 
-/** The simple MIS PDF: one page per standard shown plus one page for quality/guarantees/cash/staff, never blank. */
-describe('MIS PDF — simple layout', () => {
-  it('renders without a blank page (maintenance on, golden data)', async () => {
-    const { settings, data } = goldenInput();
-    const on = { ...settings, maintenance: { ...settings.maintenance, enabled: true } };
-    const bundle: Bundle = { settings: on, data, derived: computeDerived(on, data, D) };
-    const pages = await render(bundle, D);
-    expect(pages).toBeGreaterThanOrEqual(2);
-    expect(pages).toBeLessThanOrEqual(6);
+/** The MIS PDF prints exactly the filter the user picked: one period, one standard. */
+describe('MIS PDF — filtered layout', () => {
+  it.each([
+    [{ period: 'today', kind: 'actual' }, 'DAILY', 'ACTUAL STANDARD'],
+    [{ period: 'mtd', kind: 'bidding' }, 'MONTHLY', 'BIDDING STANDARD'],
+    [{ period: 'utd', kind: 'actual' }, 'UP TO DATE (UTD)', 'ACTUAL STANDARD'],
+  ] as Array<[MisFilter, string, string]>)('prints only %j', (f, periodLabel, kindLabel) => {
+    const out = html(f);
+    expect(out).toContain(periodLabel);
+    expect(out).toContain(kindLabel);
+    for (const other of ['DAILY', 'MONTHLY', 'UP TO DATE (UTD)'].filter((l) => l !== periodLabel)) expect(out).not.toContain(other);
+    for (const other of ['ACTUAL STANDARD', 'BIDDING STANDARD'].filter((l) => l !== kindLabel)) expect(out).not.toContain(other);
   });
 
-  it('one standard shown renders fewer pages than both', async () => {
-    const { settings, data } = goldenInput();
-    const both = { ...settings, standardsShown: 'both' as const };
-    const one = { ...settings, standardsShown: 'actual' as const };
-    const pBoth = await render({ settings: both, data, derived: computeDerived(both, data, D) }, D);
-    const pOne = await render({ settings: one, data, derived: computeDerived(one, data, D) }, D);
-    expect(pOne).toBeLessThan(pBoth);
+  it('has the Average and Limit-exceeded columns in key parameters and chemicals', () => {
+    const out = html({ period: 'mtd', kind: 'actual' });
+    expect(out.match(/AVERAGE \/ DAY/g)).toHaveLength(2);
+    expect(out.match(/LIMIT EXCEEDED \(DAYS\)/g)).toHaveLength(2);
   });
 
-  it('renders when every register is empty', async () => {
-    const { settings, data } = goldenInput();
-    const stripped = { ...settings, registers: [] };
-    const pages = await render({ settings: stripped, data, derived: computeDerived(stripped, data, D) }, D);
-    expect(pages).toBeGreaterThanOrEqual(2);
+  it('the figures follow the filter (Daily and Monthly differ)', () => {
+    const m = buildMis(bundle(), D);
+    const row = m.keyParameters.find((r) => r.standards.actual.today.act !== r.standards.actual.mtd.act);
+    expect(row, 'the golden day has a parameter whose Daily and Monthly actuals differ').toBeDefined();
+    expect(row!.standards.actual.avg.mtd).not.toBeNull();
+    expect(row!.standards.actual.exceed.mtd).toBeGreaterThanOrEqual(row!.standards.actual.exceed.today);
+  });
+
+  it('renders as one A4 page', async () => {
+    const pdf = await renderPdf(html({ period: 'today', kind: 'actual' }), { format: 'A4', landscape: true });
+    expect(pdfPageCount(pdf)).toBe(1);
   });
 }, 60_000);

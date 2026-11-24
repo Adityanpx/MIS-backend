@@ -14,6 +14,10 @@ export interface PerKind {
   today: Triple; mtd: Triple; utd: Triple;
   events: { mtd: number; utd: number; flag: Flag };
   results: { today: ResultLine; mtd: ResultLine; utd: ResultLine };
+  /** Average per day over each period (the day's own value for Daily). */
+  avg: { today: number | null; mtd: number | null; utd: number | null };
+  /** Number of logged days in each period on which the value was outside the standard ("limit exceeded"). */
+  exceed: { today: number; mtd: number; utd: number };
 }
 export interface ParamRowOut {
   code: string; name: string; unit: string; decimals: number; direction: string;
@@ -51,10 +55,14 @@ function perKind(b: Bundle, p: ParamDef, per: Periods, kind: StandardKind): PerK
   const mtd = triple(standard(s, p, per.mtd, 'mtd', per, kind), actual(b.data, b.derived, p, per.mtd), p.direction);
   const utd = triple(standard(s, p, per.utd, 'utd', per, kind), actual(b.data, b.derived, p, per.utd), p.direction);
   const ev = { mtd: events(s, b.data, b.derived, p, per.mtd, kind), utd: events(s, b.data, b.derived, p, per.utd, kind) };
+  // totals (sum parameters) are divided by the period's days; averages / snapshots are already per-day values
+  const avgOf = (act: number | null, period: Period) => (p.aggregation === 'sum' ? avgPerDay(b, act, period) : act);
   return {
     today, mtd, utd,
     events: { ...ev, flag: ev.mtd + ev.utd > 0 ? 'bad' : 'ok' },
     results: { today: mkResult(today, p.resultNoun, p.direction), mtd: mkResult(mtd, p.resultNoun, p.direction), utd: mkResult(utd, p.resultNoun, p.direction) },
+    avg: { today: avgOf(today.act, per.today), mtd: avgOf(mtd.act, per.mtd), utd: avgOf(utd.act, per.utd) },
+    exceed: { today: events(s, b.data, b.derived, p, per.today, kind), mtd: ev.mtd, utd: ev.utd },
   };
 }
 /** Resolves PAR-19: a parameter's own override, 'none' meaning "inherit the plant default". */
@@ -109,6 +117,9 @@ export function revenueRow(b: Bundle, per: Periods): ParamRowOut {
       today, mtd, utd, events: { ...e, flag: e.mtd + e.utd > 0 ? 'bad' : 'ok' },
       results: { today: mkResult(today, 'REVENUE GENERATED', 'higher_better'), mtd: mkResult(mtd, 'REVENUE GENERATED', 'higher_better'),
         utd: mkResult(utd, 'REVENUE GENERATED', 'higher_better') },
+      avg: { today: today.act === null ? null : today.act / per.today.days, mtd: mtd.act === null ? null : mtd.act / per.mtd.days,
+        utd: utd.act === null ? null : utd.act / per.utd.days },
+      exceed: { today: ev(per.today, kind), mtd: e.mtd, utd: e.utd },
     };
   };
   const bidding = mkKind('bidding');

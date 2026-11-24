@@ -14,7 +14,7 @@ import type { ReportTable } from '../reports/table';
 import { renderPdf } from './browser';
 import { dashboardHtml } from './templates/dashboard';
 import { logsheetHtml } from './templates/logsheet';
-import { misHtml } from './templates/mis';
+import { misHtml, type MisFilter } from './templates/mis';
 import { tableHtml } from './templates/table';
 
 export type DocType = 'logsheet' | 'mis' | 'dashboard';
@@ -31,12 +31,15 @@ export const docTitle = (doc: DocType, misPrefix: string) =>
   doc === 'logsheet' ? 'DAILY LOGSHEET' : doc === 'mis' ? misPrefix : 'MIS DASHBOARD';
 
 /** Builds the HTML for one document (no browser; also used by tests). */
-export async function documentHtml(tenantId: string, plantId: string, d: string, doc: DocType, version: number): Promise<string> {
+export async function documentHtml(
+  tenantId: string, plantId: string, d: string, doc: DocType, version: number, filter?: MisFilter,
+): Promise<string> {
   const b = await getBundle(tenantId, plantId);
   const logoKey = await withTenant({ tenantId, actorId: null }, async (tx) =>
     (await one<{ logo_key: string | null }>(tx, 'SELECT logo_key FROM app.clients WHERE id = $1', [tenantId])).logo_key);
   const meta = { version, platform: await platformName(), generatedAt: new Date().toISOString(), logoUrl: await signedUrlOrNull(logoKey) };
-  if (doc === 'mis') return misHtml(buildMis(b, d, { generatedAt: meta.generatedAt }), meta);
+  // archived (auto) MIS: Daily · the plant's primary standard; the MIS page's Download passes the user's own filter
+  if (doc === 'mis') return misHtml(buildMis(b, d, { generatedAt: meta.generatedAt }), meta, filter ?? { period: 'today', kind: b.settings.primaryStandard });
   if (doc === 'dashboard') return dashboardHtml(buildDashboard(b, d), meta);
   return logsheetHtml(b, d, meta);
 }
@@ -111,6 +114,18 @@ export async function pdfForDownload(tenantId: string, plantId: string, d: strin
   const made = await readableVersion(tenantId, plantId, d, doc);
   if (!made) throw badRequest('PDF_UNAVAILABLE', 'The PDF could not be prepared. Please try again.');
   return made;
+}
+
+const PERIOD_FILE: Record<MisFilter['period'], string> = { today: 'DAILY', mtd: 'MONTHLY', utd: 'UTD' };
+
+/** MIS PDF for exactly the filter on screen (Daily / Monthly / UTD × Actual / Bidding). Built fresh on every click, never archived. */
+export async function misFilteredPdf(tenantId: string, plantId: string, d: string, filter: MisFilter): Promise<{ key: string; file: Buffer }> {
+  if (!env.PDF_ENABLED) throw badRequest('PDF_DISABLED', 'PDF generation is turned off.');
+  const b = await getBundle(tenantId, plantId);
+  const file = await renderPdf(await documentHtml(tenantId, plantId, d, 'mis', 1, filter), { format: 'A4', landscape: true });
+  const disp = formatDisplayDate(d).toUpperCase();
+  const name = `${docTitle('mis', b.settings.display.pdfPrefixMis)} ${disp} ${PERIOD_FILE[filter.period]} ${filter.kind.toUpperCase()}.pdf`;
+  return { key: tenantKey(tenantId, 'p', plantId, 'pdf', name), file };
 }
 
 export async function tablePdf(t: ReportTable): Promise<Buffer> {
