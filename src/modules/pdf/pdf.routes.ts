@@ -1,4 +1,4 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { many, maybeOne, one } from '../../db/sql';
 import { withTenant } from '../../db/tenant';
@@ -15,7 +15,9 @@ import { plantAccess } from '../../middleware/plant-access';
 import { requireClientAdmin } from '../../middleware/require-role';
 import { isoDate, uuid } from '../../shared/schemas/common';
 import { clientActor, writeAudit } from '../audit/audit.service';
-import { assertTenantKey, storage } from '../files/storage';
+import { readStoredFile } from '../exports/download';
+import { assertTenantKey } from '../files/storage';
+import { pdfForDownload, type DocType } from './pdf.service';
 
 export const pdfRouter = Router({ mergeParams: true });
 const P = (req: Request) => {
@@ -33,14 +35,42 @@ pdfRouter.get('/', plantAccess('any'), accountState('read'), asyncHandler(async 
   ok(res, rows);
 }));
 
+/** Sends the PDF bytes themselves (no redirect to storage), so a download works from any browser and never shows a storage error. */
+function sendPdf(res: Response, key: string, file: Buffer) {
+  const name = (key.split('/').pop() ?? 'document.pdf').replace(/["\\\r\n]/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(file);
+}
+
+/** One click, always a file: the newest version of a date's document, regenerated first if its stored file is gone. */
+pdfRouter.get('/file', plantAccess('any'), accountState('read'), asyncHandler(async (req, res) => {
+  const ctx = clientCtx(req);
+  const q = parseQuery(req, z.object({ date: isoDate, type: z.enum(['logsheet', 'mis', 'dashboard']) }));
+  const { key, file } = await pdfForDownload(ctx.tenantId, P(req).id, q.date, q.type);
+  assertTenantKey(key, ctx.tenantId); // PDF-09
+  sendPdf(res, key, file);
+}));
+
 pdfRouter.get('/:pdfId/download', plantAccess('any'), accountState('read'), asyncHandler(async (req, res) => {
   const ctx = clientCtx(req);
   const { pdfId } = parseParams(req, z.object({ plantId: uuid, pdfId: uuid }));
-  const doc = await withTenant(tenantTx(ctx), (tx) => maybeOne<{ file_key: string | null }>(tx,
-    'SELECT file_key FROM app.pdf_documents WHERE tenant_id = $1 AND plant_id = $2 AND id = $3', [ctx.tenantId, P(req).id, pdfId]));
-  if (!doc?.file_key) throw notFound('PDF');
-  assertTenantKey(doc.file_key, ctx.tenantId); // PDF-09: the key must belong to the tenant before signing
-  ok(res, { url: await storage.signedUrl(doc.file_key, { downloadName: doc.file_key.split('/').pop() }) });
+  const doc = await withTenant(tenantTx(ctx), (tx) => maybeOne<{ file_key: string | null; date: string; doc_type: DocType }>(tx,
+    `SELECT file_key, to_char(d, 'YYYY-MM-DD') AS date, doc_type FROM app.pdf_documents WHERE tenant_id = $1 AND plant_id = $2 AND id = $3`,
+    [ctx.tenantId, P(req).id, pdfId]));
+  if (!doc) throw notFound('PDF');
+  if (doc.file_key) {
+    assertTenantKey(doc.file_key, ctx.tenantId); // PDF-09: the key must belong to the tenant before reading
+    try {
+      return sendPdf(res, doc.file_key, await readStoredFile(doc.file_key));
+    } catch {
+      /* the stored file is missing: fall through and rebuild the document */
+    }
+  }
+  const made = await pdfForDownload(ctx.tenantId, P(req).id, doc.date, doc.doc_type);
+  assertTenantKey(made.key, ctx.tenantId);
+  sendPdf(res, made.key, made.file);
 }));
 
 /** PDF-02: on demand (one date: Editor or Client Admin) or bulk (range: Client Admin, ≤ 366 days). */

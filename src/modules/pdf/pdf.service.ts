@@ -1,8 +1,10 @@
 import { env } from '../../config/env';
-import { exec, maybeOne, one } from '../../db/sql';
+import { exec, many, maybeOne, one } from '../../db/sql';
 import { withTenant } from '../../db/tenant';
 import { formatDisplayDate } from '../../lib/dates';
+import { badRequest } from '../../lib/errors';
 import { logger } from '../../lib/logger';
+import { readStoredFile } from '../exports/download';
 import { buildDashboard } from '../engine/core/dashboard';
 import { buildMis } from '../engine/core/mis';
 import { getBundle } from '../engine/engine.service';
@@ -73,6 +75,42 @@ export async function generateDocs(tenantId: string, plantId: string, d: string,
       throw err; // the job retries (3 times)
     }
   }
+}
+
+/** Newest current/stale version of a document whose file can really be read from storage (null if none). */
+async function readableVersion(tenantId: string, plantId: string, d: string, doc: DocType): Promise<{ key: string; file: Buffer } | null> {
+  const rows = await withTenant({ tenantId, actorId: null }, (tx) => many<{ file_key: string }>(tx,
+    `SELECT file_key FROM app.pdf_documents
+      WHERE tenant_id = $1 AND plant_id = $2 AND d = $3 AND doc_type = $4 AND status IN ('current', 'stale') AND file_key IS NOT NULL
+      ORDER BY version DESC LIMIT 3`, [tenantId, plantId, d, doc]));
+  for (const r of rows) {
+    try {
+      return { key: r.file_key, file: await readStoredFile(r.file_key) };
+    } catch (err) {
+      logger.warn({ err, key: r.file_key }, 'Archived PDF file is missing in storage');
+    }
+  }
+  return null;
+}
+
+/**
+ * Download path: always returns PDF bytes. Uses the archived file when it exists; when the record points to a file that
+ * is no longer in storage (or there is no record), a fresh version is generated first, so a click never ends in an error.
+ */
+export async function pdfForDownload(tenantId: string, plantId: string, d: string, doc: DocType): Promise<{ key: string; file: Buffer }> {
+  const found = await readableVersion(tenantId, plantId, d, doc);
+  if (found) return found;
+  if (!env.PDF_ENABLED) throw badRequest('PDF_DISABLED', 'PDF generation is turned off.');
+  try {
+    await generateDocs(tenantId, plantId, d, [doc], 'regenerate');
+  } catch (err) {
+    const again = await readableVersion(tenantId, plantId, d, doc); // a parallel click may have generated it
+    if (again) return again;
+    throw err;
+  }
+  const made = await readableVersion(tenantId, plantId, d, doc);
+  if (!made) throw badRequest('PDF_UNAVAILABLE', 'The PDF could not be prepared. Please try again.');
+  return made;
 }
 
 export async function tablePdf(t: ReportTable): Promise<Buffer> {

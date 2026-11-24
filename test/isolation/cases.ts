@@ -61,6 +61,7 @@ export const CASES_P2 = (b: Victim2, a: Attacker): Array<{ method: IsolationCase
   { method: 'post', path: `/plants/${a.plantId}/settings/copy-from`, body: { sourcePlantId: b.plantId } },
   { method: 'post', path: `/plants/${a.plantId}/logsheets/correction-requests/${b.correctionId}/approve`, body: {} },
   { method: 'get', path: `/plants/${a.plantId}/pdfs/${b.pdfId}/download` },
+  { method: 'get', path: `/plants/${b.plantId}/pdfs/file?date=2026-01-01&type=mis` },
   { method: 'post', path: '/notifications/' + b.notificationId + '/read' },
   { method: 'get', path: `/exports/${b.exportId}` },
   { method: 'get', path: `/exports/${b.exportId}/download` },
