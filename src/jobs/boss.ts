@@ -60,7 +60,7 @@ export async function startJobs(): Promise<void> {
   for (const [queue, handler] of handlers) {
     await boss.createQueue(queue);
     for (let i = 0; i < QUEUE_OPTIONS[queue].concurrency; i++) {
-      await boss.work<Record<string, unknown>>(queue, { batchSize: 1 }, async (jobs) => {
+      await boss.work<Record<string, unknown>>(queue, { batchSize: 1, pollingIntervalSeconds: env.JOBS_POLL_SEC }, async (jobs) => {
         for (const job of jobs) {
           try {
             await handler(job.data);

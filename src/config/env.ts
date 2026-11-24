@@ -61,6 +61,7 @@ const schema = z.object({
   SENTRY_DSN: z.string().optional(),
 
   JOBS_MODE: z.enum(['boss', 'inline', 'off']).default('boss'), // inline = run jobs in-process right after commit (tests)
+  JOBS_POLL_SEC: z.coerce.number().min(0.5).default(30), // pg-boss worker poll interval; the 2s default sends GBs/month to the DB
   PDF_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   CHROME_EXECUTABLE_PATH: z.string().optional(),
   PDF_MAX_PER_BROWSER: z.coerce.number().int().min(1).max(500).default(50),
