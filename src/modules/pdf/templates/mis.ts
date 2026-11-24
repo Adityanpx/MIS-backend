@@ -77,8 +77,8 @@ export function misHtml(m: MisReport, meta: { version: number; platform: string;
     </section>`).join('');
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>${BASE_CSS}
-    @page { size: A3 landscape; margin: 10mm; }
-    body { font-size: 9px; }
+    @page { size: A4 landscape; margin: 8mm; }
+    body { font-size: 8px; }
     .page { break-after: page; }
     .page:last-child { break-after: auto; }
     section, table { break-inside: avoid; }

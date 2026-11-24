@@ -53,7 +53,7 @@ export async function generateDocs(tenantId: string, plantId: string, d: string,
         [tenantId, plantId, d, doc]))?.v ?? 0) + 1);
     try {
       const html = await documentHtml(tenantId, plantId, d, doc, version);
-      const pdf = await renderPdf(html, doc === 'mis' ? { format: 'A3', landscape: true } : doc === 'dashboard'
+      const pdf = await renderPdf(html, doc === 'mis' ? { format: 'A4', landscape: true } : doc === 'dashboard'
         ? { format: 'A3', landscape: false } : { format: 'A4', landscape: false });
       const key = pdfKey(tenantId, plantId, d, docTitle(doc, b.settings.display.pdfPrefixMis), version);
       await storage.put(key, pdf, 'application/pdf');
