@@ -24,7 +24,7 @@ import type { Buffer as NodeBuffer } from 'node:buffer';
 import { exec, many, one } from '../../db/sql';
 import { withTenant, type Tx } from '../../db/tenant';
 import { tenantTx } from '../../lib/context';
-import { addDays, diffDays, todayIST } from '../../lib/dates';
+import { addDays, daysInclusive, todayIST } from '../../lib/dates';
 import { conflict, unprocessable } from '../../lib/errors';
 import type { RequestMeta } from '../../lib/request-meta';
 import type { ClientCtx, PlantCtx } from '../../types/express';
@@ -123,28 +123,29 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
   wb.created = new Date();
 
   const ws = wb.addWorksheet(DATA_SHEET, { views: [{ state: 'frozen', xSplit: 1, ySplit: 2 }] });
-  // Columns: Date + one per param. Widths are modest — Excel wraps long headings.
-  ws.columns = [{ header: DATE_HDR, key: 'date', width: 12 },
-    ...params.map((p) => ({ header: '', key: `p_${p.id}`, width: 16 }))];
+  // Columns: Date + one per param. Widths are generous enough for headings to breathe
+  // and for typed values to stay readable.
+  ws.columns = [{ header: DATE_HDR, key: 'date', width: 14 },
+    ...params.map((p) => ({ header: '', key: `p_${p.id}`, width: 22 }))];
 
   // Minimal, consistent typography — Calibri 10, no colour fills.
   const base = { name: 'Calibri', size: 10 } as const;
   const thin = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } };
 
-  // Row 1 — Header (code, name, unit). Plain, slightly bold, thin border below.
+  // Row 1 — Header (parameter name with its unit). Plain and slightly bold.
   const hdr = ws.getRow(1);
-  hdr.values = [DATE_HDR, ...params.map((p) => `${p.code} — ${p.name}${p.unit ? ` (${p.unit})` : ''}`)];
-  hdr.height = 28;
+  hdr.values = [DATE_HDR, ...params.map((p) => `${p.name}${p.unit ? ` (${p.unit})` : ''}`)];
+  hdr.height = 32;
   hdr.eachCell((c) => {
     c.font = { ...base, bold: true };
     c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
     c.border = { bottom: thin };
   });
 
-  // Row 2 — Standard row (locked, minimal styling).
+  // Row 2 — Standard row (locked, italic grey, same minimal look).
   const stdRow = ws.getRow(2);
   stdRow.values = ['Std', ...params.map((p) => standardCellText(s, p, from, to))];
-  stdRow.height = 18;
+  stdRow.height = 20;
   stdRow.eachCell((c) => {
     c.font = { ...base, italic: true, color: { argb: 'FF666666' } };
     c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
@@ -153,10 +154,13 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
   });
 
   // Data rows — one per date, pre-filled and locked in column A.
-  const totalDays = diffDays(to, from) + 1;
+  // NB: dates.ts has `diffDays(a, b) = b - a`; use daysInclusive so the loop runs forwards
+  // and the whole range is written.
+  const totalDays = daysInclusive(from, to);
   for (let i = 0; i < totalDays; i++) {
     const d = addDays(from, i);
     const r = ws.getRow(3 + i);
+    r.height = 20;                         // comfortable row height for typing
     const dateCell = r.getCell(1);
     dateCell.value = d;
     dateCell.numFmt = '@';                 // keep as plain text so Excel never reformats or shifts it
