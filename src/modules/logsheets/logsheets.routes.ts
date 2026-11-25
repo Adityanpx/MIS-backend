@@ -15,7 +15,7 @@ import {
   monthQuery, saveDraftBody, submitBody,
 } from '../../shared/schemas/logsheet';
 import { uploadSingle } from '../files/upload';
-import { assertRange, previewImport, runImport, templateWorkbook } from './import';
+import { assertRange, assertRangeOpen, fileRange, previewImport, runImport, templateWorkbook } from './import';
 import * as svc from './logsheets.service';
 
 export const logsheetsRouter = Router({ mergeParams: true });
@@ -45,6 +45,7 @@ const requireXlsx = (req: Request) => {
 logsheetsRouter.get('/import/template', plantAccess(['editor']), accountState('read'), h(async (req, res) => {
   const { from, to } = parseQuery(req, importRangeQuery);
   assertRange(P(req), from, to);
+  await assertRangeOpen(clientCtx(req), P(req), from, to);
   const buf = await templateWorkbook(clientCtx(req), P(req), from, to);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition',
@@ -52,18 +53,21 @@ logsheetsRouter.get('/import/template', plantAccess(['editor']), accountState('r
   res.setHeader('Content-Length', String(buf.length));
   res.end(buf);
 }));
+// Uploads: the date range comes from the file's hidden sheet, not from the request.
 logsheetsRouter.post('/import/preview', plantAccess(['editor']), accountState('read'), xlsxUpload, h(async (req, res) => {
-  const { from, to } = parseBody(req, importBody);
-  assertRange(P(req), from, to);
+  parseBody(req, importBody);
   const buf = requireXlsx(req);
+  const { from, to } = await fileRange(buf);
+  assertRange(P(req), from, to);
   ok(res, await previewImport(clientCtx(req), P(req), from, to, buf));
 }));
 logsheetsRouter.post('/import', plantAccess(['editor']), accountState('write'), xlsxUpload, h(async (req, res) => {
   const body = parseBody(req, importBody);
   if (!body.conflict) throw badRequest('IMPORT_CONFLICT_MISSING', 'Pick how to handle days that already exist.');
-  assertRange(P(req), body.from, body.to);
   const buf = requireXlsx(req);
-  ok(res, await runImport(clientCtx(req), P(req), body.from, body.to, buf, body.conflict, requestMeta(req)));
+  const { from, to } = await fileRange(buf);
+  assertRange(P(req), from, to);
+  ok(res, await runImport(clientCtx(req), P(req), from, to, buf, body.conflict, requestMeta(req)));
 }));
 // ──────────────────────────────────────────────────────────────────────────
 logsheetsRouter.get('/correction-requests', plantAccess([]), requireClientAdmin, accountState('read'), h(async (req, res) =>

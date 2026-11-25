@@ -27,9 +27,12 @@ export const importRangeQuery = z.object({ from: isoDate, to: isoDate })
 
 /** 'use_excel' = replace existing days with the file's values · 'keep_existing' = skip them. */
 export const importConflictPolicy = z.enum(['use_excel', 'keep_existing']);
-/** Multipart form fields that accompany the uploaded .xlsx on preview and run. */
+/**
+ * Multipart form fields that accompany the uploaded .xlsx on preview and run. The date range is
+ * read from the file itself; from/to are still accepted (older clients send them) but ignored.
+ */
 export const importBody = z.object({
-  from: isoDate,
-  to: isoDate,
+  from: isoDate.optional(),
+  to: isoDate.optional(),
   conflict: importConflictPolicy.optional(), // required on /import, ignored on /import/preview
 }).strict();

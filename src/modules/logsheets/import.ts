@@ -24,7 +24,7 @@ import type { Buffer as NodeBuffer } from 'node:buffer';
 import { exec, many, one } from '../../db/sql';
 import { withTenant, type Tx } from '../../db/tenant';
 import { tenantTx } from '../../lib/context';
-import { addDays, daysInclusive, todayIST } from '../../lib/dates';
+import { addDays, daysInclusive, formatDisplayDate, todayIST } from '../../lib/dates';
 import { conflict, unprocessable } from '../../lib/errors';
 import type { RequestMeta } from '../../lib/request-meta';
 import type { ClientCtx, PlantCtx } from '../../types/express';
@@ -459,6 +459,19 @@ async function entryOptions(tx: Tx, ctx: ClientCtx, plant: PlantCtx) {
     backfillDays: s.editor_backfill_days, isClientAdmin: ctx.isClientAdmin };
 }
 
+/**
+ * The date range an uploaded template covers, read from its hidden `_meta` sheet. Uploads take
+ * the range from the file itself, so the user never has to re-pick the range they downloaded.
+ */
+export async function fileRange(file: NodeBuffer): Promise<{ from: string; to: string }> {
+  const { meta } = await parseWorkbook(file);
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso.test(meta.from) || !iso.test(meta.to) || meta.from > meta.to || daysInclusive(meta.from, meta.to) > 401) {
+    throw unprocessable('IMPORT_TEMPLATE_MISSING', 'Please upload the template downloaded from this page.');
+  }
+  return { from: meta.from, to: meta.to };
+}
+
 /** Shared parse + plan-build body. Verifies the meta and range match the request. */
 async function parseAndPlan(ctx: ClientCtx, plant: PlantCtx, from: string, to: string, file: NodeBuffer, tx: Tx) {
   const b = await getBundle(ctx.tenantId, plant.id);
@@ -650,4 +663,43 @@ export function assertRange(plant: PlantCtx, from: string, to: string) {
   if (to > todayIST()) {
     throw unprocessable('IMPORT_RANGE_FUTURE', 'A logsheet cannot be imported for a future date.');
   }
+}
+
+/**
+ * Before a template is built: every date in the range must be open for entry for THIS user
+ * (same-day rule, plant live, editor back-fill window). Otherwise the user would fill the whole
+ * file and only then learn that some rows can never be imported.
+ */
+export async function assertRangeOpen(ctx: ClientCtx, plant: PlantCtx, from: string, to: string) {
+  const b = await getBundle(ctx.tenantId, plant.id);
+  await withTenant(tenantTx(ctx), async (tx) => {
+    const opts = await entryOptions(tx, ctx, plant);
+    const existing = new Set((await many<{ d: string }>(tx,
+      'SELECT log_date::text AS d FROM app.logsheets WHERE tenant_id = $1 AND plant_id = $2 AND log_date BETWEEN $3 AND $4',
+      [ctx.tenantId, plant.id, from, to])).map((r) => r.d));
+    const blocked = new Map<string, string[]>(); // reason → dates
+    let lastOpen: string | null = null;
+    let firstOpen: string | null = null;
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const exists = existing.has(d);
+      const rule = dateRule(b.settings, { ...opts, exists }, d);
+      if (rule.allowed || (opts.isClientAdmin && exists)) {
+        firstOpen ??= d;
+        lastOpen = d;
+        continue;
+      }
+      const reason = reasonText(rule.reason);
+      blocked.set(reason, [...(blocked.get(reason) ?? []), d]);
+    }
+    if (blocked.size === 0) return;
+    const parts = [...blocked].map(([reason, dates]) => {
+      const first = dates[0] ?? '';
+      const last = dates[dates.length - 1] ?? '';
+      const span = dates.length === 1 ? formatDisplayDate(first) : `${formatDisplayDate(first)} to ${formatDisplayDate(last)}`;
+      return `${span}: ${reason.toLowerCase()}`;
+    });
+    const hint = firstOpen && lastOpen ? ` Pick a range between ${formatDisplayDate(firstOpen)} and ${formatDisplayDate(lastOpen)}.` : '';
+    throw unprocessable('IMPORT_RANGE_NOT_OPEN', `Some dates can't be imported (${parts.join('; ')}).${hint}`,
+      { blocked: Object.fromEntries(blocked) });
+  });
 }
