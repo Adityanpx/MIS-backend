@@ -123,55 +123,60 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
   wb.created = new Date();
 
   const ws = wb.addWorksheet(DATA_SHEET, { views: [{ state: 'frozen', xSplit: 1, ySplit: 2 }] });
-  // Columns: Date + one per param
-  ws.columns = [{ header: DATE_HDR, key: 'date', width: 14 },
-    ...params.map((p) => ({ header: '', key: `p_${p.id}`, width: 20 }))];
+  // Columns: Date + one per param. Widths are modest — Excel wraps long headings.
+  ws.columns = [{ header: DATE_HDR, key: 'date', width: 12 },
+    ...params.map((p) => ({ header: '', key: `p_${p.id}`, width: 16 }))];
 
-  // Row 1 — Header (code, name, unit). Style is set per-cell so the number format on the Std row below does not bleed up.
+  // Minimal, consistent typography — Calibri 10, no colour fills.
+  const base = { name: 'Calibri', size: 10 } as const;
+  const thin = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } };
+
+  // Row 1 — Header (code, name, unit). Plain, slightly bold, thin border below.
   const hdr = ws.getRow(1);
   hdr.values = [DATE_HDR, ...params.map((p) => `${p.code} — ${p.name}${p.unit ? ` (${p.unit})` : ''}`)];
-  hdr.height = 36;
+  hdr.height = 28;
   hdr.eachCell((c) => {
-    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+    c.font = { ...base, bold: true };
     c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
-    c.border = { bottom: { style: 'thin', color: { argb: 'FF111827' } } };
+    c.border = { bottom: thin };
   });
 
-  // Row 2 — Standard row (greyed, locked).
+  // Row 2 — Standard row (locked, minimal styling).
   const stdRow = ws.getRow(2);
   stdRow.values = ['Std', ...params.map((p) => standardCellText(s, p, from, to))];
-  stdRow.height = 24;
+  stdRow.height = 18;
   stdRow.eachCell((c) => {
-    c.font = { italic: true, color: { argb: 'FF374151' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
+    c.font = { ...base, italic: true, color: { argb: 'FF666666' } };
     c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
     c.protection = { locked: true };
-    c.border = { bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } } };
+    c.border = { bottom: thin };
   });
 
-  // Data rows — one per date.
+  // Data rows — one per date, pre-filled and locked in column A.
   const totalDays = diffDays(to, from) + 1;
   for (let i = 0; i < totalDays; i++) {
     const d = addDays(from, i);
     const r = ws.getRow(3 + i);
-    r.getCell(1).value = d;
-    r.getCell(1).numFmt = '@'; // keep as plain text so Excel never reformats it
-    r.getCell(1).protection = { locked: true };
-    r.getCell(1).font = { bold: true };
-    r.getCell(1).alignment = { horizontal: 'left' };
+    const dateCell = r.getCell(1);
+    dateCell.value = d;
+    dateCell.numFmt = '@';                 // keep as plain text so Excel never reformats or shifts it
+    dateCell.protection = { locked: true };
+    dateCell.font = { ...base };
+    dateCell.alignment = { horizontal: 'left', vertical: 'middle' };
+    dateCell.border = { right: thin };
     // Cell per parameter
     for (let j = 0; j < params.length; j++) {
       const p = params[j];
       if (!p) continue;
       const cell = r.getCell(2 + j);
+      cell.font = { ...base };
+      cell.alignment = { horizontal: 'left', vertical: 'middle' };
       const active = (!p.activeFrom || p.activeFrom <= d) && (!p.activeTo || p.activeTo >= d);
       if (!active) {
         cell.value = '—';
         cell.protection = { locked: true };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
-        cell.font = { color: { argb: 'FF9CA3AF' } };
-        cell.alignment = { horizontal: 'center' };
+        cell.font = { ...base, color: { argb: 'FF999999' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
         continue;
       }
       cell.protection = { locked: false };
@@ -192,7 +197,8 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
       }
     }
   }
-  // Protect the sheet: only cells with protection: { locked: false } become editable.
+  // Protect the sheet: only cells with protection: { locked: false } become editable,
+  // so the Date column, the Std row, and inactive cells can't be touched.
   await ws.protect('', { selectLockedCells: true, selectUnlockedCells: true, formatCells: false,
     formatColumns: false, formatRows: false, insertRows: false, insertColumns: false, deleteRows: false,
     deleteColumns: false, sort: false, autoFilter: false });
