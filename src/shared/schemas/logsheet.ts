@@ -17,3 +17,19 @@ export const submitBody = z.object({
 export const correctBody = z.object({ values: z.array(valueItem).min(1).max(500), version: z.coerce.number().int().min(1), reason }).strict();
 export const correctionRequestBody = z.object({ values: z.array(valueItem).min(1).max(500), reason }).strict();
 export const decideBody = z.object({ comment: z.string().trim().max(1000).optional() }).strict();
+
+/** Excel import: date range for both the template download and the upload preview/run. */
+export const importRangeQuery = z.object({ from: isoDate, to: isoDate })
+  .refine((v) => v.from <= v.to, { message: 'from must be on or before to', path: ['from'] })
+  // Cap the range to ~400 days so a single workbook stays small and memory-safe.
+  .refine((v) => (Date.parse(v.to) - Date.parse(v.from)) / 86_400_000 <= 400,
+    { message: 'Range is too large (max 400 days)', path: ['to'] });
+
+/** 'use_excel' = replace existing days with the file's values · 'keep_existing' = skip them. */
+export const importConflictPolicy = z.enum(['use_excel', 'keep_existing']);
+/** Multipart form fields that accompany the uploaded .xlsx on preview and run. */
+export const importBody = z.object({
+  from: isoDate,
+  to: isoDate,
+  conflict: importConflictPolicy.optional(), // required on /import, ignored on /import/preview
+}).strict();

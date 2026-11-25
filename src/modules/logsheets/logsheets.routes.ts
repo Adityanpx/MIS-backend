@@ -1,7 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { UPLOAD_LIMITS } from '../../config/constants';
 import { clientCtx } from '../../lib/context';
-import { notFound } from '../../lib/errors';
+import { badRequest, notFound } from '../../lib/errors';
 import { asyncHandler, noContent, ok } from '../../lib/http';
 import { requestMeta } from '../../lib/request-meta';
 import { parseBody, parseParams, parseQuery } from '../../lib/validate';
@@ -9,7 +10,12 @@ import { accountState } from '../../middleware/account-state';
 import { plantAccess } from '../../middleware/plant-access';
 import { requireClientAdmin } from '../../middleware/require-role';
 import { uuid } from '../../shared/schemas/common';
-import { correctBody, correctionRequestBody, dateParam, decideBody, monthQuery, saveDraftBody, submitBody } from '../../shared/schemas/logsheet';
+import {
+  correctBody, correctionRequestBody, dateParam, decideBody, importBody, importRangeQuery,
+  monthQuery, saveDraftBody, submitBody,
+} from '../../shared/schemas/logsheet';
+import { uploadSingle } from '../files/upload';
+import { assertRange, previewImport, runImport, templateWorkbook } from './import';
 import * as svc from './logsheets.service';
 
 export const logsheetsRouter = Router({ mergeParams: true });
@@ -24,6 +30,42 @@ const statusQ = z.object({ status: z.enum(['pending', 'approved', 'rejected']).o
 
 logsheetsRouter.get('/calendar', plantAccess('any'), accountState('read'), h(async (req, res) =>
   ok(res, await svc.calendar(clientCtx(req), P(req), parseQuery(req, monthQuery).month))));
+
+// ─── Excel import (LOG-IMPORT) ─────────────────────────────────────────────
+// A blank template users download, then the upload preview + run — both editors and Client Admins.
+const xlsxUpload = uploadSingle('file', UPLOAD_LIMITS.documentBytes);
+const requireXlsx = (req: Request) => {
+  const f = req.file;
+  if (!f || !f.size) throw badRequest('FILE_REQUIRED', 'Please attach the filled template.');
+  const name = (f.originalname ?? '').toLowerCase();
+  if (!name.endsWith('.xlsx')) throw badRequest('IMPORT_NOT_XLSX', 'Only .xlsx files are accepted.');
+  return f.buffer;
+};
+
+logsheetsRouter.get('/import/template', plantAccess(['editor']), accountState('read'), h(async (req, res) => {
+  const { from, to } = parseQuery(req, importRangeQuery);
+  assertRange(P(req), from, to);
+  const buf = await templateWorkbook(clientCtx(req), P(req), from, to);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="logsheet-template_${P(req).id.slice(0, 8)}_${from}_${to}.xlsx"`);
+  res.setHeader('Content-Length', String(buf.length));
+  res.end(buf);
+}));
+logsheetsRouter.post('/import/preview', plantAccess(['editor']), accountState('read'), xlsxUpload, h(async (req, res) => {
+  const { from, to } = parseBody(req, importBody);
+  assertRange(P(req), from, to);
+  const buf = requireXlsx(req);
+  ok(res, await previewImport(clientCtx(req), P(req), from, to, buf));
+}));
+logsheetsRouter.post('/import', plantAccess(['editor']), accountState('write'), xlsxUpload, h(async (req, res) => {
+  const body = parseBody(req, importBody);
+  if (!body.conflict) throw badRequest('IMPORT_CONFLICT_MISSING', 'Pick how to handle days that already exist.');
+  assertRange(P(req), body.from, body.to);
+  const buf = requireXlsx(req);
+  ok(res, await runImport(clientCtx(req), P(req), body.from, body.to, buf, body.conflict, requestMeta(req)));
+}));
+// ──────────────────────────────────────────────────────────────────────────
 logsheetsRouter.get('/correction-requests', plantAccess([]), requireClientAdmin, accountState('read'), h(async (req, res) =>
   ok(res, await svc.listCorrectionRequests(clientCtx(req), P(req), parseQuery(req, statusQ).status))));
 logsheetsRouter.post('/correction-requests/:id/approve', plantAccess([]), requireClientAdmin, accountState('write'), h(async (req, res) => {
