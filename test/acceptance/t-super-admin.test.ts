@@ -50,40 +50,34 @@ describe('Acceptance — Super Admin: plans, subscriptions, settings, act-as', (
   );
 
   it(
-    'T18 — Plan price edit: existing subscriptions are unchanged (price snapshot, PLN-03); new ones use the new price',
+    'T18 — Per-plant pricing: each subscription locks the price and hike typed for it; another client\'s price never changes it',
     async () => {
-      // Existing subscription at ₹50,000 — snapshot stored at creation.
+      // Subscription typed at ₹50,000 — stored normalised to 2 decimals.
       const b = await billingSetup({ price: '50000' });
-      const beforeSub = await sql(
+      const firstSub = () => sql(
         `SELECT plan_snapshot FROM app.subscriptions WHERE tenant_id = $1 ORDER BY created_at LIMIT 1`,
         [b.tid],
       );
-      expect(beforeSub.rows[0].plan_snapshot.pricePerYear).toBe('50000.00');
+      expect((await firstSub()).rows[0].plan_snapshot.pricePerYear).toBe('50000.00');
 
-      // Patch the plan to ₹70,000 — the snapshot on the existing subscription is unchanged.
-      const patched = await api().patch(`/api/admin/v1/plans/${b.planId}`).set(bearer(b.admin))
-        .send({ pricePerYear: '70000' });
-      expect(patched.status).toBe(200);
-
-      const afterSub = await sql(
-        `SELECT plan_snapshot FROM app.subscriptions WHERE tenant_id = $1 ORDER BY created_at LIMIT 1`,
-        [b.tid],
-      );
-      expect(afterSub.rows[0].plan_snapshot.pricePerYear).toBe('50000.00');
-
-      // A new plant on the same plan picks up the new price.
+      // A new plant for another client at ₹70,000 + 10% hike.
       const t2 = await seedTenant();
       const p2 = await api().post('/api/admin/v1/plants').set(bearer(b.admin)).send({
         clientId: t2.tenantId, name: 'New STP', type: 'STP', capacityMld: 120, stateCode: '27',
         omStart: '2024-09-01', omTenureMonths: 60,
-        subscription: { startDate: todayIST(), termYears: 5, pricePerYear: '54000.00', escalationPct: 5 },
+        subscription: { startDate: todayIST(), termYears: 3, pricePerYear: '70000', escalationPct: 10 },
       });
       expect(p2.status).toBe(201);
+      expect(p2.body.data.subscription.schedule.map((s: { amount: string }) => s.amount))
+        .toEqual(['70000.00', '77000.00', '84700.00']);
       const newSub = await sql(
         `SELECT plan_snapshot FROM app.subscriptions WHERE tenant_id = $1 ORDER BY created_at LIMIT 1`,
         [t2.tenantId],
       );
-      expect(newSub.rows[0].plan_snapshot.pricePerYear).toBe('70000.00');
+      expect(newSub.rows[0].plan_snapshot).toMatchObject({ pricePerYear: '70000.00', escalationPct: '10', termYears: 3 });
+
+      // The first client's subscription is untouched.
+      expect((await firstSub()).rows[0].plan_snapshot.pricePerYear).toBe('50000.00');
     },
   );
 
