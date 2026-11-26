@@ -138,7 +138,7 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
   hdr.height = 32;
   hdr.eachCell((c) => {
     c.font = { ...base, bold: true };
-    c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     c.border = { bottom: thin };
   });
 
@@ -148,7 +148,7 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
   stdRow.height = 20;
   stdRow.eachCell((c) => {
     c.font = { ...base, italic: true, color: { argb: 'FF666666' } };
-    c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     c.protection = { locked: true };
     c.border = { bottom: thin };
   });
@@ -166,7 +166,7 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
     dateCell.numFmt = '@';                 // keep as plain text so Excel never reformats or shifts it
     dateCell.protection = { locked: true };
     dateCell.font = { ...base };
-    dateCell.alignment = { horizontal: 'left', vertical: 'middle' };
+    dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
     dateCell.border = { right: thin };
     // Cell per parameter
     for (let j = 0; j < params.length; j++) {
@@ -174,7 +174,7 @@ export async function templateWorkbook(ctx: ClientCtx, plant: PlantCtx, from: st
       if (!p) continue;
       const cell = r.getCell(2 + j);
       cell.font = { ...base };
-      cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
       const active = (!p.activeFrom || p.activeFrom <= d) && (!p.activeTo || p.activeTo >= d);
       if (!active) {
         cell.value = '—';
