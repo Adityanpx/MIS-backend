@@ -80,18 +80,15 @@ export const planPreviewBody = z
   })
   .strict();
 
+/** Per-plant terms typed by the Super Admin (no plan catalogue). Billed yearly; the hike compounds every year. */
+export const customTerms = {
+  termYears: z.coerce.number().int().min(1).max(MAX_CONTRACT_YEARS),
+  pricePerYear: moneyString,
+  escalationPct: pct(100).default(0),
+};
 export const subscriptionInput = z
-  .object({
-    planId: uuid,
-    startDate: isoDate,
-    billingMode: z.enum(BILLING_MODES),
-    customPricePerYear: moneyString.optional(),
-    customReason: reason.optional(),
-  })
-  .strict()
-  .refine((s) => !s.customPricePerYear || !!s.customReason, {
-    message: 'A reason is required for a custom price', path: ['customReason'],
-  });
+  .object({ startDate: isoDate, ...customTerms })
+  .strict();
 
 export const plantCreateBody = z
   .object({

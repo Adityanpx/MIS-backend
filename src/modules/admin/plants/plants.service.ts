@@ -1,23 +1,22 @@
 import { exec, many, maybeOne, one, setClause } from '../../../db/sql';
 import { withAdmin, type AdminTxCtx, type Tx } from '../../../db/tenant';
-import type { PlanSnapshot } from '../../../db/types';
 import { todayIST } from '../../../lib/dates';
 import { conflict, notFound, unprocessable } from '../../../lib/errors';
 import { orderBy } from '../../../lib/pagination';
 import type { RequestMeta } from '../../../lib/request-meta';
-import type { BillingMode } from '../../../shared/enums';
 import { adminActor, diff, writeAudit } from '../../audit/audit.service';
 import { buildContractYears, omEndDate } from '../../domain/contract-years';
+import { customSnapshot, type CustomTerms } from '../../domain/custom-terms';
 import { buildBillingSchedule, gstSplit, subscriptionEndDate, sumAmounts } from '../../domain/pricing';
 import { applyTemplate } from '../../settings/apply-template';
 import { getSetting } from '../../platform/settings.service';
-import { gstRatePct, loadPlan } from '../plans/plans.service';
+import { gstRatePct } from '../plans/plans.service';
 import { currentSubscription } from '../subscriptions/subscriptions.service';
 
 export interface PlantCreateInput {
   clientId: string; name: string; code?: string; type: string; capacityMld: number; city?: string; stateCode: string;
   omStart: string; omTenureMonths: number; misStart?: string;
-  subscription: { planId: string; startDate: string; billingMode: BillingMode; customPricePerYear?: string; customReason?: string };
+  subscription: CustomTerms & { startDate: string };
 }
 interface PlantRowFull {
   id: string; tenant_id: string; code: string; name: string; type: string; capacity_mld: string; city: string | null;
@@ -65,8 +64,6 @@ async function prepare(tx: Tx, input: PlantCreateInput) {
   if (client.status !== 'active' || client.account_state === 'terminated') {
     throw unprocessable('CLIENT_NOT_ACTIVE', 'Plants can only be added to an active client.');
   }
-  const plan = await loadPlan(tx, input.subscription.planId);
-  if (plan.status !== 'active') throw unprocessable('PLAN_ARCHIVED', 'This plan is archived and cannot be used for new subscriptions.');
 
   const omEnd = omEndDate(input.omStart, input.omTenureMonths);
   const misStart = input.misStart ?? input.omStart;
@@ -78,14 +75,14 @@ async function prepare(tx: Tx, input: PlantCreateInput) {
   const today = todayIST();
   const sub = input.subscription;
   const startDate = sub.startDate;
-  const endDate = subscriptionEndDate(startDate, plan.term_years);
+  const endDate = subscriptionEndDate(startDate, sub.termYears);
   if (endDate < today) throw unprocessable('SUBSCRIPTION_ALREADY_ENDED', 'The subscription period has already ended.');
-  const pricePerYear = sub.customPricePerYear ?? plan.price_per_year;
+  const pricePerYear = sub.pricePerYear;
   const billing = await getSetting<BillingSettings>('billing', {});
   const seller = await getSetting<SellerSettings>('seller.company', {});
   const schedule = buildBillingSchedule({
-    startDate, termYears: plan.term_years, billingMode: sub.billingMode, pricePerYear,
-    escalationPct: plan.escalation_pct, upfrontDiscountPct: plan.upfront_discount_pct, today,
+    startDate, termYears: sub.termYears, billingMode: 'yearly', pricePerYear,
+    escalationPct: sub.escalationPct, upfrontDiscountPct: 0, today,
     invoiceLeadDays: billing.invoiceLeadDays ?? 30, minPaymentTermsDays: billing.minPaymentTermsDays ?? 7,
   });
   const first = schedule[0];
@@ -97,14 +94,9 @@ async function prepare(tx: Tx, input: PlantCreateInput) {
   if (endDate > omEnd) warnings.push('SUBSCRIPTION_ENDS_AFTER_OM_END'); // SUB-02: allowed, but warn
   if (!sellerState) warnings.push('SELLER_STATE_NOT_CONFIGURED'); // GST split unknown until Settings → Company is filled
 
-  const snapshot: PlanSnapshot = {
-    planId: plan.id, name: plan.name, code: plan.code, termYears: plan.term_years, pricePerYear: plan.price_per_year,
-    escalationPct: plan.escalation_pct, upfrontDiscountPct: plan.upfront_discount_pct,
-    maxUsersPerPlant: plan.max_users_per_plant, maxManagementUsers: plan.max_management_users,
-    storageGb: plan.storage_gb, features: plan.features,
-  };
+  const snapshot = customSnapshot(sub);
   return {
-    client, plan, snapshot, omEnd, misStart, contractYears, startDate, endDate, pricePerYear, schedule, warnings,
+    client, snapshot, omEnd, misStart, contractYears, startDate, endDate, pricePerYear, schedule, warnings,
     status: startDate > today ? 'scheduled' : 'active',
     firstInvoice: {
       ...gstSplit(first.amount, await gstRatePct(), intra),
@@ -118,9 +110,8 @@ function previewDto(input: PlantCreateInput, p: Awaited<ReturnType<typeof prepar
     plant: { omStart: input.omStart, omTenureMonths: input.omTenureMonths, omEnd: p.omEnd, misStart: p.misStart },
     contractYears: p.contractYears,
     subscription: {
-      planId: p.plan.id, planName: p.plan.name, termYears: p.plan.term_years, startDate: p.startDate, endDate: p.endDate,
-      billingMode: input.subscription.billingMode, pricePerYear: p.pricePerYear,
-      escalationPct: Number(p.plan.escalation_pct), upfrontDiscountPct: Number(p.plan.upfront_discount_pct),
+      termYears: input.subscription.termYears, startDate: p.startDate, endDate: p.endDate,
+      billingMode: 'yearly', pricePerYear: p.pricePerYear, escalationPct: Number(input.subscription.escalationPct),
       totalExGst: sumAmounts(p.schedule), status: p.status,
     },
     schedule: p.schedule,
@@ -181,9 +172,8 @@ export async function createPlant(ctx: AdminTxCtx, input: PlantCreateInput, meta
       tx,
       `INSERT INTO app.subscriptions (tenant_id, plant_id, plan_id, plan_snapshot, custom_price_per_year, custom_reason,
                                       start_date, end_date, billing_mode, status, created_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-      [tenantId, id, p.plan.id, JSON.stringify(p.snapshot), sub.customPricePerYear ?? null, sub.customReason ?? null,
-        p.startDate, p.endDate, sub.billingMode, p.status, ctx.adminId],
+       VALUES ($1, $2, NULL, $3::jsonb, NULL, NULL, $4, $5, 'yearly', $6, $7) RETURNING id`,
+      [tenantId, id, JSON.stringify(p.snapshot), p.startDate, p.endDate, p.status, ctx.adminId],
     );
     for (const r of p.schedule) {
       await exec(
@@ -206,9 +196,8 @@ export async function createPlant(ctx: AdminTxCtx, input: PlantCreateInput, meta
     }, meta);
     await writeAudit(tx, actor, {
       action: 'subscription.create', entity: 'subscription', entityId: subscriptionId,
-      after: { plan: p.snapshot, billingMode: sub.billingMode, startDate: p.startDate, endDate: p.endDate,
-        customPricePerYear: sub.customPricePerYear ?? null, total: sumAmounts(p.schedule) },
-      reason: sub.customReason ?? null,
+      after: { termYears: sub.termYears, pricePerYear: sub.pricePerYear, escalationPct: sub.escalationPct,
+        startDate: p.startDate, endDate: p.endDate, total: sumAmounts(p.schedule) },
     }, meta);
     return { plantId: id, warnings: p.warnings };
   });

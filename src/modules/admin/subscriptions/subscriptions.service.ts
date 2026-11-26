@@ -5,7 +5,7 @@ import { notFound } from '../../../lib/errors';
 import { sumAmounts } from '../../domain/pricing';
 
 interface SubRow {
-  id: string; tenant_id: string; plant_id: string; plan_id: string; plan_snapshot: PlanSnapshot;
+  id: string; tenant_id: string; plant_id: string; plan_id: string | null; plan_snapshot: PlanSnapshot;
   custom_price_per_year: string | null; custom_reason: string | null; start_date: string; end_date: string;
   billing_mode: string; trial_days: number; status: string; created_at: string;
   plant_name: string; plant_code: string; client_name: string; client_code: string;

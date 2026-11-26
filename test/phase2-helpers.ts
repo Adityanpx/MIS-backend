@@ -9,7 +9,7 @@ export async function livePlant(opts: { maxUsers?: number } = {}) {
   const t = await seedTenant();
   const plant = await api().post('/api/admin/v1/plants').set(bearer(admin)).send({
     clientId: t.tenantId, name: 'Test STP', type: 'STP', capacityMld: 120, stateCode: '27', omStart: '2024-09-01', omTenureMonths: 60,
-    subscription: { planId: plan.body.data.id, startDate: todayIST(), billingMode: 'yearly' } });
+    subscription: { startDate: todayIST(), termYears: 5, pricePerYear: '50000', escalationPct: 0 } });
   if (plant.status !== 201) throw new Error(JSON.stringify(plant.body));
   const plantId = plant.body.data.id as string;
   const ca = (await loginClient(t.admin.email)).token;

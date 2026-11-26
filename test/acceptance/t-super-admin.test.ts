@@ -32,7 +32,7 @@ describe('Acceptance — Super Admin: plans, subscriptions, settings, act-as', (
       const plant = await api().post('/api/admin/v1/plants').set(bearer(admin)).send({
         clientId: tenant.tenantId, name: 'Too long', type: 'STP', capacityMld: 10, stateCode: '27',
         omStart: '2024-09-01', omTenureMonths: 181,
-        subscription: { planId: good.body.data.id, startDate: todayIST(), billingMode: 'yearly' },
+        subscription: { startDate: todayIST(), termYears: 5, pricePerYear: '54000.00', escalationPct: 5 },
       });
       expect(plant.status).toBeGreaterThanOrEqual(400);
       expect(plant.status).toBeLessThan(500);
@@ -76,7 +76,7 @@ describe('Acceptance — Super Admin: plans, subscriptions, settings, act-as', (
       const p2 = await api().post('/api/admin/v1/plants').set(bearer(b.admin)).send({
         clientId: t2.tenantId, name: 'New STP', type: 'STP', capacityMld: 120, stateCode: '27',
         omStart: '2024-09-01', omTenureMonths: 60,
-        subscription: { planId: b.planId, startDate: todayIST(), billingMode: 'yearly' },
+        subscription: { startDate: todayIST(), termYears: 5, pricePerYear: '54000.00', escalationPct: 5 },
       });
       expect(p2.status).toBe(201);
       const newSub = await sql(

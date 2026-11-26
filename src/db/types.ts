@@ -33,12 +33,12 @@ export interface ContractYearRow {
   days: number; fixed_fee: string; fee_configured: boolean;
 }
 export interface SubscriptionRow {
-  id: string; tenant_id: string; plant_id: string; plan_id: string; plan_snapshot: PlanSnapshot;
+  id: string; tenant_id: string; plant_id: string; plan_id: string | null; plan_snapshot: PlanSnapshot;
   custom_price_per_year: string | null; custom_reason: string | null; start_date: string; end_date: string;
   billing_mode: 'yearly' | 'upfront'; trial_days: number; status: string; created_at: string;
 }
 export interface PlanSnapshot {
-  planId: string; name: string; code: string; termYears: number; pricePerYear: string; escalationPct: string;
+  planId: string | null; name: string; code: string; termYears: number; pricePerYear: string; escalationPct: string;
   upfrontDiscountPct: string; maxUsersPerPlant: number; maxManagementUsers: number; storageGb: number;
   features: Record<string, boolean>;
 }

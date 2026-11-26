@@ -8,10 +8,10 @@ import { conflict, notFound, unprocessable } from '../../../lib/errors';
 import type { RequestMeta } from '../../../lib/request-meta';
 import { invalidateClientAuthCache } from '../../../middleware/auth-client';
 import { MAX_CONTRACT_YEARS } from '../../../shared/constants';
-import type { BillingMode } from '../../../shared/enums';
 import { adminActor, writeAudit } from '../../audit/audit.service';
 import { loadBillingConfig, type BillingConfig } from '../../billing/billing-config';
 import { cancelInvoiceTx } from '../../billing/invoices.service';
+import { customSnapshot, type CustomTerms } from '../../domain/custom-terms';
 import { buildBillingSchedule, escalatedYearAmounts, subscriptionEndDate } from '../../domain/pricing';
 import { evaluateTenant } from '../../lifecycle/lifecycle.service';
 import { sendInBackground } from '../../notifications/email.service';
@@ -54,9 +54,7 @@ async function finish(tenantId: string, outbox: Array<string | null>, subscripti
   if (subscriptionId) await enqueue(QUEUES.invoicesGenerate, { subscriptionId });
 }
 
-export interface RenewInput {
-  plantId: string; planId: string; startDate?: string; billingMode: BillingMode; customPricePerYear?: string; customReason?: string;
-}
+export interface RenewInput extends CustomTerms { plantId: string; startDate?: string }
 /** SUB-01/04/08: renewal = a new subscription that starts the day after the current one ends (or later). */
 export async function renewSubscription(ctx: AdminTxCtx, input: RenewInput, meta: RequestMeta) {
   const today = todayIST();
@@ -84,25 +82,21 @@ export async function renewSubscription(ctx: AdminTxCtx, input: RenewInput, meta
     const earliest = last.end_date ? addDays(last.end_date, 1) : today;
     const start = input.startDate ?? (last.active ? earliest : maxDate(earliest, today));
     if (start < earliest) throw unprocessable('RENEWAL_OVERLAPS', `The renewal must start on or after ${earliest}.`);
-    const plan = await loadPlan(tx, input.planId);
-    if (plan.status !== 'active') throw unprocessable('PLAN_ARCHIVED', 'This plan is archived and cannot be used for new subscriptions.');
-    const endDate = subscriptionEndDate(start, plan.term_years);
+    const endDate = subscriptionEndDate(start, input.termYears);
     if (endDate < today) throw unprocessable('SUBSCRIPTION_ALREADY_ENDED', 'The subscription period has already ended.');
     const cfg = await loadBillingConfig(tx);
     const schedule = buildBillingSchedule({
-      startDate: start, termYears: plan.term_years, billingMode: input.billingMode,
-      pricePerYear: input.customPricePerYear ?? plan.price_per_year, escalationPct: plan.escalation_pct,
-      upfrontDiscountPct: plan.upfront_discount_pct, today, invoiceLeadDays: cfg.billing.invoiceLeadDays,
+      startDate: start, termYears: input.termYears, billingMode: 'yearly',
+      pricePerYear: input.pricePerYear, escalationPct: input.escalationPct,
+      upfrontDiscountPct: 0, today, invoiceLeadDays: cfg.billing.invoiceLeadDays,
       minPaymentTermsDays: cfg.billing.minPaymentTermsDays,
     });
     const status = start > today ? 'scheduled' : 'active';
     const { id } = await one<{ id: string }>(
       tx,
-      `INSERT INTO app.subscriptions (tenant_id, plant_id, plan_id, plan_snapshot, custom_price_per_year, custom_reason,
-                                      start_date, end_date, billing_mode, status, created_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-      [tenantId, input.plantId, plan.id, JSON.stringify(snapshotOf(plan)), input.customPricePerYear ?? null, input.customReason ?? null,
-        start, endDate, input.billingMode, status, ctx.adminId],
+      `INSERT INTO app.subscriptions (tenant_id, plant_id, plan_id, plan_snapshot, start_date, end_date, billing_mode, status, created_by)
+       VALUES ($1, $2, NULL, $3::jsonb, $4, $5, 'yearly', $6, $7) RETURNING id`,
+      [tenantId, input.plantId, JSON.stringify(customSnapshot(input)), start, endDate, status, ctx.adminId],
     );
     for (const s of schedule) {
       await exec(
@@ -115,8 +109,7 @@ export async function renewSubscription(ctx: AdminTxCtx, input: RenewInput, meta
     const actor = adminActor(ctx.adminId, tenantId);
     await writeAudit(tx, actor, {
       action: 'subscription.renew', entity: 'subscription', entityId: id,
-      after: { plan: plan.code, start, endDate, billingMode: input.billingMode, customPricePerYear: input.customPricePerYear ?? null },
-      reason: input.customReason ?? null,
+      after: { termYears: input.termYears, pricePerYear: input.pricePerYear, escalationPct: input.escalationPct, start, endDate },
     }, meta);
     const ev = await evaluateTenant(tx, tenantId, { actor, cause: 'manual', note: 'Subscription renewed' });
     return { id, tenantId, outbox: ev.outbox, warnings: endDate > plant.om_end ? ['SUBSCRIPTION_ENDS_AFTER_OM_END'] : [] };

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MAX_CONTRACT_YEARS } from '../constants';
-import { BILLING_MODES, DOCUMENT_TYPES, OFFLINE_PAYMENT_MODES } from '../enums';
+import { DOCUMENT_TYPES, OFFLINE_PAYMENT_MODES } from '../enums';
+import { customTerms } from './admin';
 import { isoDate, moneyString, reason, uuid } from './common';
 
 const positive = (v: string) => Number(v) > 0;
@@ -93,14 +94,10 @@ export const deleteClientBody = z.object({ confirmCode: z.string().trim().min(3)
 export const renewBody = z
   .object({
     plantId: uuid,
-    planId: uuid,
     startDate: isoDate.optional(), // default: the day after the current subscription ends (SUB-04)
-    billingMode: z.enum(BILLING_MODES),
-    customPricePerYear: money.optional(),
-    customReason: reason.optional(),
+    ...customTerms,
   })
-  .strict()
-  .refine((b) => !b.customPricePerYear || !!b.customReason, { message: 'A reason is required for a custom price', path: ['customReason'] });
+  .strict();
 export const extendSubscriptionBody = z
   .object({ addYears: z.coerce.number().int().min(1).max(MAX_CONTRACT_YEARS - 1), pricePerYear: money.optional(), reason })
   .strict();

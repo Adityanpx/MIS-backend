@@ -75,7 +75,7 @@ describe('plants wizard', () => {
     const body = {
       clientId: t.tenantId, name: 'Bherampur STP', type: 'STP', capacityMld: 120, stateCode: '27',
       omStart: '2024-09-01', omTenureMonths: 60,
-      subscription: { planId: plan.id, startDate: '2026-10-01', billingMode: 'yearly' },
+      subscription: { startDate: '2026-10-01', termYears: 5, pricePerYear: '54000.00', escalationPct: 5 },
     };
     const pv = await api().post('/api/admin/v1/plants/preview').set(A()).send(body);
     expect(pv.status).toBe(200);

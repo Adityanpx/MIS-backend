@@ -29,7 +29,7 @@ export async function billingSetup(opts: { sellerState?: '06' | '27'; price?: st
   const tenant = await seedTenant();
   const plant = await api().post('/api/admin/v1/plants').set(bearer(admin)).send({
     clientId: tenant.tenantId, name: 'Billing STP', type: 'STP', capacityMld: 120, stateCode: '27', omStart: '2024-09-01',
-    omTenureMonths: 60, subscription: { planId: plan.body.data.id, startDate: todayIST(), billingMode: 'yearly' },
+    omTenureMonths: 60, subscription: { startDate: todayIST(), termYears: 5, pricePerYear: opts.price ?? '54000', escalationPct: 0 },
   });
   if (plant.status !== 201) throw new Error(`plant: ${JSON.stringify(plant.body)}`);
   await drainJobs();
