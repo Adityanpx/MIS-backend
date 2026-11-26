@@ -343,15 +343,29 @@ function typeValue(p: ParamDef, raw: string): { ok: true; value: number | string
   return { ok: true, value: n };
 }
 
-type Existing = { date: string; id: string; status: string; version: number };
+type Existing = {
+  date: string; id: string; status: string; version: number;
+  locked_by: string | null; locked_until: string | null; locked_name: string | null;
+};
 
+/** Every existing logsheet in the range, with its edit lock, in ONE query (was one extra query per day). */
 async function loadExisting(tx: Tx, ctx: ClientCtx, plantId: string, from: string, to: string): Promise<Map<string, Existing>> {
   const rows = await many<Existing>(tx,
-    `SELECT log_date AS date, id, status, version FROM app.logsheets
-      WHERE tenant_id = $1 AND plant_id = $2 AND log_date BETWEEN $3 AND $4
-      FOR UPDATE`, [ctx.tenantId, plantId, from, to]);
+    `SELECT l.log_date AS date, l.id, l.status, l.version, l.locked_by, l.locked_until, u.name AS locked_name
+       FROM app.logsheets l LEFT JOIN app.users u ON u.tenant_id = l.tenant_id AND u.id = l.locked_by
+      WHERE l.tenant_id = $1 AND l.plant_id = $2 AND l.log_date BETWEEN $3 AND $4
+      FOR UPDATE OF l`, [ctx.tenantId, plantId, from, to]);
   return new Map(rows.map((r) => [r.date, r]));
 }
+
+/** Split a list into slices of at most `size` (keeps each multi-row statement a sane size). */
+function chunks<T>(list: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+const DAYS_PER_STATEMENT = 1000;
+const VALUES_PER_STATEMENT = 5000;
 
 async function buildPlans(
   ctx: ClientCtx, plant: PlantCtx, from: string, to: string, rows: ParsedRow[],
@@ -407,14 +421,8 @@ async function buildPlans(
     for (const w of vw) warnings.push({ date: d, code: w.code, name: codeToParam.get(w.code)?.name ?? w.code, message: w.message });
 
     // A submitted/corrected logsheet being edited by someone else right now — hold the import.
-    if (ex) {
-      const r2 = await one<{ locked_by: string | null; locked_until: string | null; locked_name: string | null }>(tx,
-        `SELECT l.locked_by, l.locked_until, u.name AS locked_name
-           FROM app.logsheets l LEFT JOIN app.users u ON u.tenant_id = l.tenant_id AND u.id = l.locked_by
-          WHERE l.tenant_id = $1 AND l.id = $2`, [ctx.tenantId, ex.id]);
-      if (r2.locked_by && r2.locked_by !== ctx.userId && r2.locked_until && Date.parse(r2.locked_until) > Date.now()) {
-        errors.push({ date: d, code: 'DATE', name: 'Date', message: `Being edited by ${r2.locked_name ?? 'another user'}` });
-      }
+    if (ex && ex.locked_by && ex.locked_by !== ctx.userId && ex.locked_until && Date.parse(ex.locked_until) > Date.now()) {
+      errors.push({ date: d, code: 'DATE', name: 'Date', message: `Being edited by ${ex.locked_name ?? 'another user'}` });
     }
 
     plans.push({
@@ -518,14 +526,22 @@ export async function runImport(
   const codeToParam = new Map(s.params.map((p) => [p.code, p]));
 
   const result = await withTenant(tenantTx(ctx), async (tx) => {
+    // One import per plant at a time: a second click/retry fails fast instead of queueing behind the
+    // first one's row locks until the statement timeout.
+    const { got } = await one<{ got: boolean }>(tx,
+      'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got', [`logsheet-import:${plant.id}`]);
+    if (!got) {
+      throw conflict('IMPORT_IN_PROGRESS', 'An import for this plant is already being saved. Please wait for it to finish.');
+    }
     const { plans } = await parseAndPlan(ctx, plant, from, to, file, tx);
     // Hard stop on any row-level error — whole file fails.
     const bad = plans.filter((p) => p.errors.length).flatMap((p) => p.errors);
     if (bad.length) throw unprocessable('IMPORT_VALIDATION_FAILED', 'The file has errors.', { errors: bad });
 
-    let inserted = 0, corrected = 0, skipped = 0;
+    let skipped = 0;
     const allWarnings: ImportIssue[] = [];
-    const daysWritten: string[] = [];
+    const toInsert: DayPlan[] = [];
+    const toCorrect: DayPlan[] = [];
 
     for (const p of plans) {
       if (!p.values.size && p.status === 'missing') continue; // nothing to do for a totally empty row
@@ -533,17 +549,16 @@ export async function runImport(
         (p.status === 'submitted' || p.status === 'corrected' || p.status === 'checked' || p.status === 'verified');
 
       if (isExistingSubmitted && policy === 'keep_existing') { skipped++; continue; }
-
-      if (isExistingSubmitted) {
-        await rewriteAsCorrection(tx, ctx, plant, p, codeToParam);
-        corrected++;
-      } else {
-        await insertOrPromote(tx, ctx, plant, p, codeToParam);
-        inserted++;
-      }
+      (isExistingSubmitted ? toCorrect : toInsert).push(p);
       allWarnings.push(...p.warnings);
-      daysWritten.push(p.date);
     }
+
+    // Batched writes: a handful of statements for the whole file instead of ~(1 + params) per day.
+    await rewriteAsCorrections(tx, ctx, toCorrect, codeToParam);
+    await insertOrPromoteMany(tx, ctx, plant, toInsert, codeToParam);
+    const inserted = toInsert.length;
+    const corrected = toCorrect.length;
+    const daysWritten = [...toCorrect, ...toInsert].map((p) => p.date);
 
     if (daysWritten.length === 0) {
       // Everything was skipped — still a valid outcome, not an error.
@@ -569,87 +584,126 @@ export async function runImport(
   return result;
 }
 
-// ──────────────────────────────────────────────────────────────── per-day writers
+// ──────────────────────────────────────────────────────────────── batched writers
+// Every writer takes ALL days at once and uses multi-row statements (unnest arrays), so the number of
+// round trips no longer grows with days × parameters (270 days × 42 params used to be ~11,600 queries).
 
-async function writeRowValues(
-  tx: Tx, ctx: ClientCtx, logsheetId: string,
-  params: ParamDef[], values: Values,
+/** Upsert (or delete, for blank cells) the typed values of many logsheets. */
+async function writeValuesMany(
+  tx: Tx, ctx: ClientCtx, params: ParamDef[], days: Array<{ logsheetId: string; values: Values }>,
 ) {
-  for (const p of params) {
-    if (!values.has(p.code)) continue;
-    const v = values.get(p.code);
-    if (v === null || v === undefined || v === '') {
-      await exec(tx, 'DELETE FROM app.logsheet_values WHERE tenant_id = $1 AND logsheet_id = $2 AND parameter_id = $3',
-        [ctx.tenantId, logsheetId, p.id]);
-      continue;
+  const up: Array<[string, string, number | null, string | null]> = [];
+  const del: Array<[string, string]> = [];
+  for (const { logsheetId, values } of days) {
+    for (const p of params) {
+      if (!values.has(p.code)) continue;
+      const v = values.get(p.code);
+      if (v === null || v === undefined || v === '') del.push([logsheetId, p.id]);
+      else up.push([logsheetId, p.id, typeof v === 'number' ? v : null, typeof v === 'string' ? v : null]);
     }
+  }
+  for (const part of chunks(del, VALUES_PER_STATEMENT)) {
     await exec(tx,
-      `INSERT INTO app.logsheet_values (tenant_id, logsheet_id, parameter_id, value_num, value_text) VALUES ($1, $2, $3, $4, $5)
+      `DELETE FROM app.logsheet_values v USING unnest($2::uuid[], $3::uuid[]) AS x(l, p)
+        WHERE v.tenant_id = $1 AND v.logsheet_id = x.l AND v.parameter_id = x.p`,
+      [ctx.tenantId, part.map((r) => r[0]), part.map((r) => r[1])]);
+  }
+  for (const part of chunks(up, VALUES_PER_STATEMENT)) {
+    await exec(tx,
+      `INSERT INTO app.logsheet_values (tenant_id, logsheet_id, parameter_id, value_num, value_text)
+       SELECT $1, x.l, x.p, x.n, x.t FROM unnest($2::uuid[], $3::uuid[], $4::numeric[], $5::text[]) AS x(l, p, n, t)
        ON CONFLICT (tenant_id, logsheet_id, parameter_id) DO UPDATE SET value_num = EXCLUDED.value_num, value_text = EXCLUDED.value_text`,
-      [ctx.tenantId, logsheetId, p.id, typeof v === 'number' ? v : null, typeof v === 'string' ? v : null]);
+      [ctx.tenantId, part.map((r) => r[0]), part.map((r) => r[1]), part.map((r) => r[2]), part.map((r) => r[3])]);
   }
 }
 
-async function readCurrentValues(tx: Tx, ctx: ClientCtx, logsheetId: string): Promise<Values> {
-  const rows = await many<{ code: string; value_num: string | null; value_text: string | null }>(tx,
-    `SELECT p.code, v.value_num, v.value_text
-       FROM app.logsheet_values v
-       JOIN app.parameters p ON p.tenant_id = v.tenant_id AND p.id = v.parameter_id
-      WHERE v.tenant_id = $1 AND v.logsheet_id = $2`, [ctx.tenantId, logsheetId]);
-  return new Map(rows.map((r) => [r.code, r.value_num !== null ? Number(r.value_num) : r.value_text]));
-}
-
-/** Insert the logsheet as submitted (or promote an existing draft). */
-async function insertOrPromote(
-  tx: Tx, ctx: ClientCtx, plant: PlantCtx, p: DayPlan, codeToParam: Map<string, ParamDef>,
-) {
-  const row = await one<{ id: string; version: number }>(tx,
-    `INSERT INTO app.logsheets (tenant_id, plant_id, log_date, status, version, submitted_by, submitted_at, source, created_by)
-     VALUES ($1, $2, $3, 'submitted', 1, $4, now(), 'import', $4)
-     ON CONFLICT (tenant_id, plant_id, log_date) DO UPDATE SET
-       status = 'submitted', version = app.logsheets.version + 1, submitted_by = $4, submitted_at = now(),
-       source = 'import', locked_by = NULL, locked_until = NULL
-     RETURNING id, version`, [ctx.tenantId, plant.id, p.date, ctx.userId]);
-  const params = [...codeToParam.values()];
-  await writeRowValues(tx, ctx, row.id, params, p.values);
-}
-
-/** Rewrite a submitted/corrected/checked/verified day, logging history for every changed value. */
-async function rewriteAsCorrection(
-  tx: Tx, ctx: ClientCtx, plant: PlantCtx, p: DayPlan, codeToParam: Map<string, ParamDef>,
-) {
-  if (!p.existingId) return;
-  // Stale-check — someone edited the day between parseAndPlan and now.
-  const cur = await one<{ version: number }>(tx,
-    'SELECT version FROM app.logsheets WHERE tenant_id = $1 AND id = $2 FOR UPDATE',
-    [ctx.tenantId, p.existingId]);
-  if (cur.version !== p.existingVersion) {
-    throw conflict('STALE_VERSION', `The logsheet for ${p.date} was changed by another user. Please upload again.`);
+/** Current values of many logsheets: logsheet id → (code → value). */
+async function readCurrentValuesMany(tx: Tx, ctx: ClientCtx, logsheetIds: string[]): Promise<Map<string, Values>> {
+  const out = new Map<string, Values>(logsheetIds.map((id) => [id, new Map()]));
+  for (const part of chunks(logsheetIds, DAYS_PER_STATEMENT)) {
+    const rows = await many<{ logsheet_id: string; code: string; value_num: string | null; value_text: string | null }>(tx,
+      `SELECT v.logsheet_id, p.code, v.value_num, v.value_text
+         FROM app.logsheet_values v
+         JOIN app.parameters p ON p.tenant_id = v.tenant_id AND p.id = v.parameter_id
+        WHERE v.tenant_id = $1 AND v.logsheet_id = ANY($2::uuid[])`, [ctx.tenantId, part]);
+    for (const r of rows) out.get(r.logsheet_id)?.set(r.code, r.value_num !== null ? Number(r.value_num) : r.value_text);
   }
-  const before = await readCurrentValues(tx, ctx, p.existingId);
-  const newVersion = cur.version + 1;
-  const params = [...codeToParam.values()];
-  const reason = 'Excel import';
+  return out;
+}
 
-  for (const prm of params) {
-    if (!p.values.has(prm.code)) continue;
-    const o = before.get(prm.code) ?? null;
-    const n = p.values.get(prm.code) ?? null;
-    if (o === n) continue;
+/** Insert the days as submitted (or promote existing drafts), then write their values. */
+async function insertOrPromoteMany(
+  tx: Tx, ctx: ClientCtx, plant: PlantCtx, plans: DayPlan[], codeToParam: Map<string, ParamDef>,
+) {
+  if (!plans.length) return;
+  const idByDate = new Map<string, string>();
+  for (const part of chunks(plans.map((p) => p.date), DAYS_PER_STATEMENT)) {
+    const rows = await many<{ id: string; d: string }>(tx,
+      `INSERT INTO app.logsheets (tenant_id, plant_id, log_date, status, version, submitted_by, submitted_at, source, created_by)
+       SELECT $1, $2, d, 'submitted', 1, $3, now(), 'import', $3 FROM unnest($4::date[]) AS d
+       ON CONFLICT (tenant_id, plant_id, log_date) DO UPDATE SET
+         status = 'submitted', version = app.logsheets.version + 1, submitted_by = $3, submitted_at = now(),
+         source = 'import', locked_by = NULL, locked_until = NULL
+       RETURNING id, log_date AS d`, [ctx.tenantId, plant.id, ctx.userId, part]);
+    for (const r of rows) idByDate.set(r.d, r.id);
+  }
+  await writeValuesMany(tx, ctx, [...codeToParam.values()],
+    plans.map((p) => ({ logsheetId: idByDate.get(p.date) as string, values: p.values })));
+}
+
+/** Rewrite submitted/corrected/checked/verified days, logging history for every changed value. */
+async function rewriteAsCorrections(
+  tx: Tx, ctx: ClientCtx, plans: DayPlan[], codeToParam: Map<string, ParamDef>,
+) {
+  const days = plans.filter((p): p is DayPlan & { existingId: string } => !!p.existingId);
+  if (!days.length) return;
+  // Stale-check — someone edited a day between parseAndPlan and now (rows are already locked FOR UPDATE).
+  const current = new Map<string, number>();
+  for (const part of chunks(days.map((p) => p.existingId), DAYS_PER_STATEMENT)) {
+    const rows = await many<{ id: string; version: number }>(tx,
+      'SELECT id, version FROM app.logsheets WHERE tenant_id = $1 AND id = ANY($2::uuid[]) FOR UPDATE',
+      [ctx.tenantId, part]);
+    for (const r of rows) current.set(r.id, r.version);
+  }
+  for (const p of days) {
+    if (current.get(p.existingId) !== p.existingVersion) {
+      throw conflict('STALE_VERSION', `The logsheet for ${p.date} was changed by another user. Please upload again.`);
+    }
+  }
+  const before = await readCurrentValuesMany(tx, ctx, days.map((p) => p.existingId));
+  const params = [...codeToParam.values()];
+  type Hist = [string, string, number, number | null, number | null, string | null, string | null];
+  const history: Hist[] = [];
+  for (const p of days) {
+    const old = before.get(p.existingId) ?? new Map();
+    for (const prm of params) {
+      if (!p.values.has(prm.code)) continue;
+      const o = old.get(prm.code) ?? null;
+      const n = p.values.get(prm.code) ?? null;
+      if (o === n) continue;
+      history.push([p.existingId, prm.id, p.existingVersion + 1,
+        typeof o === 'number' ? o : null, typeof n === 'number' ? n : null,
+        typeof o === 'string' ? o : null, typeof n === 'string' ? n : null]);
+    }
+  }
+  for (const part of chunks(history, VALUES_PER_STATEMENT)) {
     await exec(tx,
       `INSERT INTO app.logsheet_value_history (tenant_id, logsheet_id, parameter_id, version,
          old_num, new_num, old_text, new_text, changed_by, reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [ctx.tenantId, p.existingId, prm.id, newVersion,
-        typeof o === 'number' ? o : null, typeof n === 'number' ? n : null,
-        typeof o === 'string' ? o : null, typeof n === 'string' ? n : null,
-        ctx.userId, reason]);
+       SELECT $1, x.l, x.p, x.v, x.on, x.nn, x.ot, x.nt, $2, 'Excel import'
+         FROM unnest($3::uuid[], $4::uuid[], $5::int[], $6::numeric[], $7::numeric[], $8::text[], $9::text[])
+           AS x(l, p, v, "on", nn, ot, nt)`,
+      [ctx.tenantId, ctx.userId, part.map((r) => r[0]), part.map((r) => r[1]), part.map((r) => r[2]),
+        part.map((r) => r[3]), part.map((r) => r[4]), part.map((r) => r[5]), part.map((r) => r[6])]);
   }
-  await writeRowValues(tx, ctx, p.existingId, params, p.values);
-  await exec(tx,
-    `UPDATE app.logsheets SET status = 'corrected', version = $3, source = 'import',
-       locked_by = NULL, locked_until = NULL
-      WHERE tenant_id = $1 AND id = $2`, [ctx.tenantId, p.existingId, newVersion]);
+  await writeValuesMany(tx, ctx, params, days.map((p) => ({ logsheetId: p.existingId, values: p.values })));
+  for (const part of chunks(days, DAYS_PER_STATEMENT)) {
+    await exec(tx,
+      `UPDATE app.logsheets l SET status = 'corrected', version = x.v, source = 'import', locked_by = NULL, locked_until = NULL
+         FROM unnest($2::uuid[], $3::int[]) AS x(id, v)
+        WHERE l.tenant_id = $1 AND l.id = x.id`,
+      [ctx.tenantId, part.map((p) => p.existingId), part.map((p) => p.existingVersion + 1)]);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────── guard utilities
