@@ -12,7 +12,8 @@ import { insertRefreshToken } from './auth.repo';
 
 export interface PlantAccessDto {
   plantId: string; code: string; name: string; role: PlantRole | 'client_admin' | 'management';
-  setupStatus: string; accountState: string;
+  /** Plant type (STP, WTP, CETP…), used by the company-level MIS / reports filters. */
+  type: string; setupStatus: string; accountState: string;
 }
 export interface SessionProfile {
   user: {
@@ -53,22 +54,22 @@ export async function loadProfile(
     [tenantId, userId],
   );
   const plants = u.is_client_admin
-    ? await many<{ id: string; code: string; name: string; setup_status: string; account_state: string; role: string }>(
+    ? await many<{ id: string; code: string; name: string; type: string; setup_status: string; account_state: string; role: string }>(
         tx,
-        `SELECT p.id, p.code, p.name, p.setup_status, p.account_state, 'client_admin' AS role
+        `SELECT p.id, p.code, p.name, p.type, p.setup_status, p.account_state, 'client_admin' AS role
            FROM app.plants p WHERE p.tenant_id = $1 ORDER BY p.name`,
         [tenantId],
       )
     : u.is_management
-    ? await many<{ id: string; code: string; name: string; setup_status: string; account_state: string; role: string }>(
+    ? await many<{ id: string; code: string; name: string; type: string; setup_status: string; account_state: string; role: string }>(
         tx,
-        `SELECT p.id, p.code, p.name, p.setup_status, p.account_state, 'management' AS role
+        `SELECT p.id, p.code, p.name, p.type, p.setup_status, p.account_state, 'management' AS role
            FROM app.plants p WHERE p.tenant_id = $1 AND p.setup_status <> 'closed' ORDER BY p.name`,
         [tenantId],
       )
-    : await many<{ id: string; code: string; name: string; setup_status: string; account_state: string; role: string }>(
+    : await many<{ id: string; code: string; name: string; type: string; setup_status: string; account_state: string; role: string }>(
         tx,
-        `SELECT p.id, p.code, p.name, p.setup_status, p.account_state, r.role
+        `SELECT p.id, p.code, p.name, p.type, p.setup_status, p.account_state, r.role
            FROM app.user_plant_roles r
            JOIN app.plants p ON p.tenant_id = r.tenant_id AND p.id = r.plant_id
           WHERE r.tenant_id = $1 AND r.user_id = $2 ORDER BY p.name`,
@@ -85,7 +86,7 @@ export async function loadProfile(
       force2fa: u.force_2fa, logoUrl: await signedUrlOrNull(u.logo_key),
     },
     plants: plants.map((p) => ({
-      plantId: p.id, code: p.code, name: p.name, role: p.role as PlantAccessDto['role'],
+      plantId: p.id, code: p.code, name: p.name, type: p.type, role: p.role as PlantAccessDto['role'],
       setupStatus: p.setup_status, accountState: p.account_state,
     })),
     mustAcceptTerms: u.is_client_admin && !!termsVersion && u.terms_version !== termsVersion,

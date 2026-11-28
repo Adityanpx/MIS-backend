@@ -59,7 +59,23 @@ function toValues(params: Array<{ id: string; code: string; inputMode: string }>
 // ------------------------------------------------------------------ read
 export async function calendar(ctx: ClientCtx, plant: PlantCtx, month: string) {
   const from = `${month}-01`;
-  const to = monthEnd(from);
+  const { days } = await calendarDays(ctx, plant, from, monthEnd(from));
+  return { month, days };
+}
+
+/** CAL-ALL: every day of a window (the whole history since the MIS start), one entry per day. */
+export async function calendarRange(ctx: ClientCtx, plant: PlantCtx, from: string, to: string) {
+  if (from > to) throw unprocessable('INVALID_RANGE', 'The start date is after the end date.');
+  if (daysBetween(from, to) > CALENDAR_MAX_DAYS) {
+    throw unprocessable('RANGE_TOO_LONG', `A calendar can cover at most ${CALENDAR_MAX_DAYS} days.`);
+  }
+  return calendarDays(ctx, plant, from, to);
+}
+
+const CALENDAR_MAX_DAYS = 2300;
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+
+async function calendarDays(ctx: ClientCtx, plant: PlantCtx, from: string, to: string) {
   return withTenant(tenantTx(ctx), async (tx) => {
     const opts = await entryOptions(tx, ctx, plant);
     const rows = await many<{ log_date: string; status: string; submitted_name: string | null; submitted_at: string | null }>(tx,
@@ -76,7 +92,7 @@ export async function calendar(ctx: ClientCtx, plant: PlantCtx, month: string) {
         : rule.reason === 'FUTURE_DATE' ? 'future' : 'not_allowed';
       days.push({ date: d, status, reason: r ? null : rule.reason, submittedBy: r?.submitted_name ?? null, submittedAt: r?.submitted_at ?? null });
     }
-    return { month, days };
+    return { from, to, days };
   });
 }
 

@@ -3,6 +3,11 @@ import { isoDate, reason, uuid } from './common';
 
 export const dateParam = z.object({ plantId: uuid, date: isoDate });
 export const monthQuery = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use YYYY-MM') });
+/** Calendar: one month (?month=) or the whole history window (?from=&to=, at most ~6 years). */
+export const calendarQuery = z.union([
+  z.object({ from: isoDate, to: isoDate }),
+  z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use YYYY-MM') }),
+]);
 export const valueItem = z.object({
   parameterId: uuid,
   value: z.union([z.number().finite(), z.string().max(1000), z.null()]),

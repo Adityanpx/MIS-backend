@@ -12,7 +12,7 @@ import { requireClientAdmin } from '../../middleware/require-role';
 import { uuid } from '../../shared/schemas/common';
 import {
   correctBody, correctionRequestBody, dateParam, decideBody, importBody, importRangeQuery,
-  monthQuery, saveDraftBody, submitBody,
+  calendarQuery, saveDraftBody, submitBody,
 } from '../../shared/schemas/logsheet';
 import { uploadSingle } from '../files/upload';
 import { assertRange, assertRangeOpen, fileRange, previewImport, runImport, templateWorkbook } from './import';
@@ -28,8 +28,11 @@ const D = (req: Request) => parseParams(req, dateParam).date;
 const idP = z.object({ plantId: uuid, id: uuid });
 const statusQ = z.object({ status: z.enum(['pending', 'approved', 'rejected']).optional() });
 
-logsheetsRouter.get('/calendar', plantAccess('any'), accountState('read'), h(async (req, res) =>
-  ok(res, await svc.calendar(clientCtx(req), P(req), parseQuery(req, monthQuery).month))));
+logsheetsRouter.get('/calendar', plantAccess('any'), accountState('read'), h(async (req, res) => {
+  const q = parseQuery(req, calendarQuery);
+  if ('month' in q) return ok(res, await svc.calendar(clientCtx(req), P(req), q.month));
+  return ok(res, await svc.calendarRange(clientCtx(req), P(req), q.from, q.to));
+}));
 
 // ─── Excel import (LOG-IMPORT) ─────────────────────────────────────────────
 // A blank template users download, then the upload preview + run — both editors and Client Admins.

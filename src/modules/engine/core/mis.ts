@@ -33,6 +33,8 @@ export interface ParamRowOut {
   resultDisplay: ResultMode;
   standards: { bidding: PerKind; actual: PerKind };
   primaryKind: StandardKind;
+  /** How the parameter adds up over days (sum = totals, avg / snapshot = levels); used to combine plants. */
+  aggregation: ParamDef['aggregation'];
 }
 export interface Bundle { settings: EngineSettings; data: EngineData; derived: DerivedMap }
 
@@ -89,7 +91,7 @@ export function paramRow(b: Bundle, p: ParamDef, per: Periods): ParamRowOut {
     utdResult: { pct: primary.results.utd.pct, text: primary.results.utd.text, flag: primary.results.utd.flag },
     mtdPct: primary.results.mtd.pct,
     monitoringTab: p.monitoringTab, resultDisplay: resolveResultDisplay(p, s),
-    standards: { bidding, actual: act }, primaryKind: s.primaryStandard,
+    standards: { bidding, actual: act }, primaryKind: s.primaryStandard, aggregation: p.aggregation,
   };
 }
 
@@ -137,7 +139,7 @@ export function revenueRow(b: Bundle, per: Periods): ParamRowOut {
     utdResult: { pct: primary.results.utd.pct, text: primary.results.utd.text, flag: primary.results.utd.flag },
     mtdPct: primary.results.mtd.pct,
     monitoringTab: 'key', resultDisplay: s.resultsDisplay,
-    standards: { bidding, actual: act }, primaryKind: s.primaryStandard,
+    standards: { bidding, actual: act }, primaryKind: s.primaryStandard, aggregation: 'sum',
   };
 }
 
@@ -172,6 +174,25 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
     const balanceFlag: Flag = balance !== null && (balance < 0 || (i.minLevel !== null && balance < i.minLevel)) ? 'bad' : 'ok';
     return { ...row, name: i.name, unit: i.unit, received: rec ? dayValue(b.data, b.derived, i.receivedCode, d) ?? 0 : 0, balance, balanceFlag };
   });
+  const PERS = ['today', 'mtd', 'utd', 'range'] as const;
+  type OnePeriod = (typeof PERS)[number];
+  const byPeriod = <T>(fn: (k: OnePeriod) => T) => Object.fromEntries(PERS.map((k) => [k, fn(k)])) as Record<OnePeriod, T>;
+  const labKind = (p: ParamDef, kind: StandardKind) => {
+    const st = standardAt(p, d, kind);
+    const min = st?.min ?? null;
+    const max = st?.max ?? null;
+    const value = (k: OnePeriod) => (k === 'today' ? (rec ? dayValue(b.data, b.derived, p.code, d) : null) : actual(b.data, b.derived, p, per[k]));
+    return {
+      min, max,
+      results: byPeriod((k) => {
+        const v = value(k);
+        if (v === null) return { result: null, flag: 'neutral' as Flag };
+        const out = (min !== null && v < min) || (max !== null && v > max);
+        return { result: out ? ('EXCEEDED LIMIT' as const) : ('WITHIN LIMIT' as const), flag: (out ? 'bad' : 'ok') as Flag };
+      }),
+      events: byPeriod((k) => events(s, b.data, b.derived, p, per[k], kind)),
+    };
+  };
   const lab = (section: 'lab_inlet' | 'lab_outlet') =>
     active.filter((p) => p.misSection === section || p.group === section).sort((a, x) => a.misOrder - x.misOrder).map((p) => {
       const st = standardAt(p, d, s.primaryStandard);
@@ -183,6 +204,13 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
         act, result: act === null ? null : exceeded ? 'EXCEEDED LIMIT' : 'WITHIN LIMIT', resultFlag: (exceeded ? 'bad' : 'ok') as Flag,
         avg: { mtd: actual(b.data, b.derived, p, per.mtd), utd: actual(b.data, b.derived, p, per.utd) },
         events: { ...ev, flag: (ev.mtd + ev.utd > 0 ? 'bad' : 'ok') as Flag },
+        // MIS-FILTER: one value per period (Daily = the day's result, else the period average) and, per standard
+        // kind, the limits, the result of each period's value and the days outside the limit.
+        values: {
+          today: act, mtd: actual(b.data, b.derived, p, per.mtd), utd: actual(b.data, b.derived, p, per.utd),
+          range: actual(b.data, b.derived, p, per.range),
+        },
+        standards: { bidding: labKind(p, 'bidding'), actual: labKind(p, 'actual') },
       };
     });
   const regRows = (kind: 'bg' | 'insurance') => {
@@ -214,6 +242,40 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
   const tot = <T extends Record<string, unknown>>(rows: T[], keys: (keyof T)[]) =>
     Object.fromEntries(keys.map((k) => [k, rows.reduce((a, r) => a + (Number(r[k]) || 0), 0)]));
 
+  /**
+   * MIS-FILTER: Staff and Safety are daily snapshots. For Monthly / UTD / Range they are shown as the AVERAGE of the
+   * logged days in that period (Daily = the day itself). `dataDays` = how many logsheets the average is over.
+   */
+  const loggedDays = (k: OnePeriod) => [...eachDay(per[k])].filter((x) => b.data.days.has(x));
+  const avgOver = (days: ISODate[], fn: (x: ISODate) => number | null) => {
+    const vals = days.map(fn).filter((v): v is number => v !== null);
+    return vals.length ? vals.reduce((a, v) => a + v, 0) / vals.length : null;
+  };
+  const staffPeriod = (k: OnePeriod) => {
+    const days = loggedDays(k);
+    const rows = s.staff.map((c) => {
+      const g = (code: string) => avgOver(days, (x) => dayValue(b.data, b.derived, code, x) ?? 0);
+      const absent = avgOver(days, (x) => b.derived.get(x)?.absent[c.code] ?? null);
+      return {
+        category: c.name,
+        contract: days.length ? avgOver(days, (x) => valueAt(c.strengths, x) ?? 0) : valueAt(c.strengths, d) ?? 0,
+        vacant: g(c.vacantCode), present: g(c.presentCode), leave: g(c.leaveCode), absent,
+        absentFlag: (absent !== null && absent > 0 ? 'bad' : 'ok') as Flag,
+      };
+    });
+    return { rows, total: tot(rows, ['contract', 'vacant', 'present', 'leave', 'absent']), dataDays: days.length, averaged: k !== 'today' };
+  };
+  const safetyPeriod = (k: OnePeriod) => {
+    const days = loggedDays(k);
+    const rows = s.safety.map((i) => {
+      const required = days.length ? avgOver(days, (x) => valueAt(i.required, x) ?? 0) ?? 0 : valueAt(i.required, d) ?? 0;
+      const act = avgOver(days, (x) => dayValue(b.data, b.derived, i.availableCode, x));
+      const deficit = act === null ? null : required - act;
+      return { item: i.name, required, actual: act, deficit, deficitFlag: (deficit !== null && deficit > 0 ? 'bad' : 'ok') as Flag };
+    });
+    return { rows, total: tot(rows, ['required', 'actual', 'deficit']), dataDays: days.length, averaged: k !== 'today' };
+  };
+
   const labTab = { inlet: lab('lab_inlet'), outlet: lab('lab_outlet') };
   const registersTab = { bankGuarantees: regRows('bg'), insurance: regRows('insurance') };
   const cashTab = {
@@ -221,9 +283,14 @@ export function buildMis(b: Bundle, d: ISODate, meta: { lastCorrectedAt?: string
     received: rec ? sumOf(receivedP, per.today) : null, inHand: dd?.cash ?? null,
     description: rec && descP ? (rec.values[descP.code] as string | null) ?? null : null,
     alertLimit: s.cash.alertLimit,
+    // MIS-FILTER: spent / received for each period (Daily = the day)
+    periods: byPeriod((k) => ({
+      spent: k === 'today' && !rec ? null : sumOf(expenseP, per[k]),
+      received: k === 'today' && !rec ? null : sumOf(receivedP, per[k]),
+    })),
   };
-  const staffTab = { rows: staff, total: tot(staff, ['contract', 'vacant', 'present', 'leave', 'absent']) };
-  const safetyTab = { rows: safety, total: tot(safety, ['required', 'actual', 'deficit']) };
+  const staffTab = { rows: staff, total: tot(staff, ['contract', 'vacant', 'present', 'leave', 'absent']), periods: byPeriod(staffPeriod) };
+  const safetyTab = { rows: safety, total: tot(safety, ['required', 'actual', 'deficit']), periods: byPeriod(safetyPeriod) };
   const maintenanceTab: MaintenanceTab | null = s.maintenance.enabled
     ? buildMaintenanceTab(s.maintenance, per.today, per.mtd, per.utd)
     : null;

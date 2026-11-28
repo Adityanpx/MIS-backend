@@ -33,8 +33,20 @@ describe('MIS PDF — filtered layout', () => {
 
   it('has the Average and Limit-exceeded columns in key parameters and chemicals', () => {
     const out = html({ period: 'mtd', kind: 'actual' });
-    expect(out.match(/AVERAGE \/ DAY/g)).toHaveLength(2);
+    expect(out.match(/<th>AVERAGE<\/th>/g)?.length).toBeGreaterThanOrEqual(2);
     expect(out.match(/LIMIT EXCEEDED \(DAYS\)/g)).toHaveLength(2);
+  });
+
+  it('has no Average column for Daily (a day is its own average)', () => {
+    const out = html({ period: 'today', kind: 'actual' });
+    expect(out).not.toContain('<th>AVERAGE</th>');
+  });
+
+  it('every section follows the filter: lab, cash, staff and safety', () => {
+    const out = html({ period: 'mtd', kind: 'actual' });
+    expect(out).toContain('QUALITY CONTROL · OUTLET');
+    expect(out).toContain('SITE CASH');
+    expect(out).toMatch(/STAFF <span class="note">— UP TO DATE|STAFF <span class="note">— MONTHLY: average of \d+ logged days/);
   });
 
   it('the figures follow the filter (Daily and Monthly differ)', () => {
@@ -45,8 +57,9 @@ describe('MIS PDF — filtered layout', () => {
     expect(row!.standards.actual.exceed.mtd).toBeGreaterThanOrEqual(row!.standards.actual.exceed.today);
   });
 
-  it('renders as one A4 page', async () => {
+  it('renders on A4 pages (the full MIS flows over at most 3 pages)', async () => {
     const pdf = await renderPdf(html({ period: 'today', kind: 'actual' }), { format: 'A4', landscape: true });
-    expect(pdfPageCount(pdf)).toBe(1);
+    expect(pdfPageCount(pdf)).toBeGreaterThanOrEqual(1);
+    expect(pdfPageCount(pdf)).toBeLessThanOrEqual(3);
   });
 }, 60_000);
