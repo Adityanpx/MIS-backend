@@ -12,9 +12,19 @@ export interface ReportTable {
 
 /** EXP-05: every report can be exported to Excel. Numbers stay numbers (Indian grouping via numFmt). */
 export async function tableToXlsx(t: ReportTable): Promise<Buffer> {
+  return tablesToXlsx([t]);
+}
+
+/** Several tables in one workbook, one worksheet each (`sheetName` overrides the sheet tab label). */
+export async function tablesToXlsx(tables: Array<ReportTable & { sheetName?: string }>): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'OMMIS';
-  const ws = wb.addWorksheet(t.title.slice(0, 31).replace(/[\\/?*[\]:]/g, ' '));
+  for (const t of tables) addSheet(wb, t, t.sheetName ?? t.title);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+function addSheet(wb: ExcelJS.Workbook, t: ReportTable, sheetName: string): void {
+  const ws = wb.addWorksheet(sheetName.slice(0, 31).replace(/[\\/?*[\]:]/g, ' '));
   ws.addRow([t.title]).font = { bold: true, size: 13 };
   if (t.subtitle) ws.addRow([t.subtitle]);
   ws.addRow([]);
@@ -27,7 +37,6 @@ export async function tableToXlsx(t: ReportTable): Promise<Buffer> {
     col.width = c.width ?? Math.max(12, c.header.length + 2);
     if (c.numFmt) col.numFmt = c.numFmt;
   });
-  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 export const NUM0 = '#,##,##0';
 export const NUM2 = '#,##,##0.00';

@@ -11,7 +11,9 @@ import { plantAccess } from '../../middleware/plant-access';
 import { STANDARD_KINDS } from '../../shared/enums';
 import { isoDate } from '../../shared/schemas/common';
 import { DEFAULT_DASHBOARD_WIDGETS, dashboardLayoutBody, type DashboardLayout } from '../../shared/schemas/dashboard';
+import { tablesToXlsx } from '../reports/table';
 import { overview } from './overview.service';
+import { portfolioTables } from './portfolio.export';
 import { portfolio, portfolioDefaultDate } from './portfolio.service';
 
 /** Mounted at /api/v1/overview (after authClient + requireTermsAccepted). */
@@ -20,10 +22,21 @@ overviewRouter.get('/', asyncHandler(async (req, res) => ok(res, await overview(
 
 /** Mounted at /api/v1/company/portfolio (v1.1, MGT-11): Client Admin or Management, read-only. */
 export const portfolioRouter = Router();
-const portfolioQuery = z.object({ date: isoDate.optional(), standard: z.enum([...STANDARD_KINDS, 'primary']).default('primary') }).strict();
+const portfolioQuery = z.object({
+  date: isoDate.optional(),
+  standard: z.enum([...STANDARD_KINDS, 'primary']).default('primary'),
+  format: z.enum(['json', 'xlsx']).default('json'),
+}).strict();
 portfolioRouter.get('/', asyncHandler(async (req, res) => {
   const q = parseQuery(req, portfolioQuery);
-  ok(res, await portfolio(clientCtx(req), q.date ?? portfolioDefaultDate(), q.standard));
+  const report = await portfolio(clientCtx(req), q.date ?? portfolioDefaultDate(), q.standard);
+  if (q.format === 'xlsx') {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Portfolio-${report.reportDate}.xlsx"`);
+    res.send(await tablesToXlsx(portfolioTables(report)));
+    return;
+  }
+  ok(res, report);
 }));
 
 /**
